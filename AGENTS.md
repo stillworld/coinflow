@@ -1,5 +1,45 @@
 # RuneLite Plugin Development — Agent Guidelines
 
+## Architecture & Codebase Map
+
+### Data & Execution Flow
+`Game Events / Ticks` ➔ `InterfaceTracker` (suppress false diffs if bank/GE/shop/trade open) ➔ `InventorySnapshotService` (compute tick-to-tick item diffs) ➔ `InventoryReconciliationEngine` (evaluates diff against handler chain) ➔ `CoinFlowSession` (updates net GP, profit/loss rates, goals) ➔ `CoinFlowOverlay` / `CoinFlowGoldDropOverlay` / `CoinFlowPanel` (UI & HUD updates).
+
+### Core Components (`src/main/java/com/coinflow/`)
+- `CoinFlowPlugin.java`: Lifecycle entry point (`startUp`/`shutDown`), event subscribers (`@Subscribe`), overlay/panel manager.
+- `CoinFlowConfig.java`: Configuration options (`@ConfigGroup("coinflow")`), display toggles, goal mode thresholds.
+- `CoinFlowSession.java`: Active session state; records net GP, gold/hour rates, elapsed time, milestones, goal targets.
+- `CoinFlowPanel.java`: Swing sidebar panel; displays session metrics, item transaction breakdown, reset button.
+- `CoinFlowOverlay.java`: Draggable HUD overlay displaying net profit, GP/hr, and goal progress.
+- `CoinFlowGoldDropOverlay.java`: Floating canvas overlay showing animated `+GP` / `-GP` drop indicators on changes.
+- `InventorySnapshot.java`: Immutable value object capturing inventory/equipment items, quantities, and GE/HA valuations.
+- `InventorySnapshotService.java`: Compares tick-over-tick snapshots and emits net item diffs for reconciliation.
+- `InterfaceTracker.java`: Tracks open widget interfaces (Bank, GE, Trade, Shops, Death Storage) to prevent false profit/loss.
+- `ConsumableRegistry.java`: Catalog of potions, foods, teleports, and degradation states with item IDs & dose rules.
+- `CoinFlowInputFilter.java`: Filters chatbox/menu inputs and validates triggers.
+
+### Reconciliation Engine (`src/main/java/com/coinflow/reconciliation/`)
+- `ReconciliationHandler.java`: Handler interface (`boolean handle(ReconciliationContext context)`).
+- `ReconciliationContext.java`: Context DTO passing snapshots, item diffs, and client metadata down the chain.
+- `InventoryReconciliationEngine.java`: Orchestrator running diffs through prioritized handlers until reconciled.
+- `PotionDoseHandler.java`: Reconciles multi-dose potions (4->3->2->1 dose, empty vial creation).
+- `FoodPortionHandler.java`: Reconciles multi-bite foods (pies, pizzas, cakes) and single-bite meals.
+- `ConsumablesAndDropsHandler.java`: Reconciles ground drops, monster loot, and single-use consumables.
+- `ChargeDegradationHandler.java`: Reconciles weapon/armor charge degradation (Barrows, crystal, charged staves/blowpipe).
+- `GearSwapHandler.java`: Reconciles inventory <-> equipment swaps (net 0 GP change).
+- `HighAlchemyHandler.java`: Reconciles High/Low Alchemy casts (alched item + runes consumed -> coins added).
+- `DroppedItemPickupHandler.java`: Distinguishes picking up player's own dropped items vs newly spawned ground items.
+- `ItemNotingHandler.java`: Reconciles noting and unnoting items (Tool Leprechaun, Phials, Piles), matching unnoted <-> noted swaps and recording service fees.
+- `ProcessingHandler.java`: Reconciles production skilling (inputs consumed ➔ products created).
+- `ProcessingPatternRegistry.java`: Recipe lookup mapping skilling inputs to outputs (crafting, fletching, cooking, etc.).
+
+### Tests (`src/test/java/com/coinflow/`)
+- `TestHelpers.java`: Mockito builders for `Client`, `ItemManager`, `ItemContainer`, fake items, and snapshots.
+- Unit tests: `CoinFlowPluginTest`, `CoinFlowPluginEventTest`, `CoinFlowSessionTest`, `GoalModeTest`, `CoinFlowOverlayTest`, `CoinFlowGoldDropOverlayTest`, `InventorySnapshotTest`, `CoinFlowInputFilterTest`, `ConsumableRegistryTest`.
+- Reconciliation tests: `reconciliation/UniversalSkillSinkTest`, `reconciliation/ChargeDegradationHandlerTest`, `reconciliation/ProcessingPatternRegistryTest`.
+
+
+
 ## Logging
 
 - Use `log.debug()` for developer/diagnostic logging.

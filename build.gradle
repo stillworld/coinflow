@@ -14,7 +14,7 @@ repositories {
 }
 
 def runeLiteVersion = 'latest.release'
-def pluginMainClass = 'com.example.ExamplePluginTest'
+def pluginMainClass = 'com.coinflow.CoinFlowPluginTest'
 
 dependencies {
 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
@@ -23,22 +23,41 @@ dependencies {
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
 	testImplementation 'junit:junit:4.12'
+	testImplementation 'org.mockito:mockito-core:4.11.0'
 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
 	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
 }
 
-group = 'com.example'
+group = 'com.coinflow'
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
 }
 
+tasks.withType(JavaExec).configureEach {
+	jvmArgs(
+		"-ea",
+		"--add-exports=java.desktop/com.apple.eawt=ALL-UNNAMED",
+		"--add-opens=java.desktop/sun.awt=ALL-UNNAMED",
+		"--add-opens=java.base/java.lang=ALL-UNNAMED",
+		"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED"
+	)
+}
+
+// Mockito 4 inline mock maker requires these opens to instrument types at runtime
+tasks.withType(Test).configureEach {
+	jvmArgs(
+		"--add-opens=java.base/java.lang=ALL-UNNAMED",
+		"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+		"--add-opens=java.base/java.util=ALL-UNNAMED"
+	)
+}
+
 tasks.register('run', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = pluginMainClass
 
-	jvmArgs "-ea"
 	args "--developer-mode", "--debug"
 }
 
