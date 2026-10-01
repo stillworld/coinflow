@@ -1,8 +1,12 @@
 # Coin Flow (Beta)
 
-Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inventory and equipment changes tick-by-tick to calculate what you're actually making in real time—whether you're bossing, doing slayer, skilling, or running clues.
+Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inventory and equipment changes tick-by-tick to calculate what you're actually making in real time whether you're bossing, doing slayer, skilling, or running clues.
 
-> **Note:** Coin Flow is currently in **beta**. While core tracking and common activities are well tested, you might occasionally run into edge cases with specific items, shops, or minigames. If you notice any strange numbers, please open an issue!
+> **Note:** Coin Flow is currently in **beta**. While core tracking and common activities are well tested, you might occasionally run into edge cases with specific items, shops, or minigames. If something doesn't look right, please open an issue!
+
+<br>
+
+![overlay example](<Screenshot 2026-09-30 at 5.00.43 PM.png>)
 
 ## Features
 
@@ -21,6 +25,10 @@ You can configure Coin Flow in the standard RuneLite plugin settings:
 - **Supplies:** Turn supply cost deduction on or off depending on whether you want gross or net profit.
 - **Ignored Items:** Add comma-separated items you don't want tracked (e.g. `Vial, Jug, Bones`).
 - **AFK / Idle:** Configure how idle time affects your calculated GP/hr.
+
+<br> 
+
+![side panel example](<Screenshot 2026-09-30 at 5.10.08 PM-1.png>)
 
 ## Feedback & Bug Reports
 
