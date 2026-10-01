@@ -74,7 +74,7 @@ import net.runelite.client.util.Text;
 	name = "Coin Flow",
 	description = "Live GP/hr and income tracker for OSRS — real-time earnings rate, session profit, and item breakdown",
 	tags = {"coin", "flow", "gp", "gold", "money", "profit", "rate", "income", "tracker"},
-	internalName = "coin-flow"
+	internalName = "coinflow"
 )
 public class CoinFlowPlugin extends Plugin
 {
