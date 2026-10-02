@@ -33,15 +33,27 @@ public interface CoinFlowConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "trackSpent",
+		name = "Track Spent",
+		description = "Track supply costs and expenses, deducting them from profit (disable for gross tracking)",
+		section = displaySection,
+		position = 1
+	)
+	default boolean trackSpent()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "showItemBreakdown",
 		name = "Show Item Breakdown",
 		description = "Show per-item breakdown in the side panel",
 		section = displaySection,
-		position = 1
+		position = 2
 	)
 	default boolean showItemBreakdown()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -49,7 +61,7 @@ public interface CoinFlowConfig extends Config
 		name = "Compact Mode",
 		description = "Display a streamlined, compact view in the side panel",
 		section = displaySection,
-		position = 2
+		position = 3
 	)
 	default boolean compactMode()
 	{
@@ -61,11 +73,11 @@ public interface CoinFlowConfig extends Config
 		name = "Show Gold Drops",
 		description = "Display floating gold drops when gaining profit",
 		section = displaySection,
-		position = 3
+		position = 4
 	)
 	default boolean showGoldDrops()
 	{
-		return true;
+		return false;
 	}
 
 	enum GoldDropPosition
@@ -92,7 +104,7 @@ public interface CoinFlowConfig extends Config
 		name = "Drop Position",
 		description = "Where to display floating gold drops on screen",
 		section = displaySection,
-		position = 4
+		position = 5
 	)
 	default GoldDropPosition goldDropPosition()
 	{
@@ -104,7 +116,7 @@ public interface CoinFlowConfig extends Config
 		name = "Min Gold Drop (GP)",
 		description = "Minimum GP value required to trigger an in-game gold drop (0 to show all)",
 		section = displaySection,
-		position = 5
+		position = 6
 	)
 	@Range(min = 0)
 	default int goldDropMinThreshold()
@@ -202,12 +214,34 @@ public interface CoinFlowConfig extends Config
 		return true;
 	}
 
+	// ── Reporting Section ─────────────────────────────────────────────────
+
+	@ConfigSection(
+		name = "Reporting",
+		description = "Reporting settings",
+		position = 2,
+		closedByDefault = true
+	)
+	String reportingSection = "reporting";
+
+	@ConfigItem(
+		keyName = "displaySummary",
+		name = "Display Summary on Reset",
+		description = "Display the session summary dialog when resetting an active session",
+		section = reportingSection,
+		position = 0
+	)
+	default boolean displaySummary()
+	{
+		return false;
+	}
+
 	// ── Advanced Section ─────────────────────────────────────────────────
 
 	@ConfigSection(
 		name = "Advanced",
 		description = "Advanced tracking settings",
-		position = 2,
+		position = 3,
 		closedByDefault = true
 	)
 	String advancedSection = "advanced";
@@ -227,7 +261,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigItem(
 		keyName = "idleTimeoutMinutes",
 		name = "Idle Timeout (minutes)",
-		description = "Minutes with no gains before pausing the GP/hr timer (when Include AFK Time is disabled)",
+		description = "Minutes of player inactivity before pausing the GP/hr timer (when Include AFK Time is disabled)",
 		section = advancedSection,
 		position = 1
 	)

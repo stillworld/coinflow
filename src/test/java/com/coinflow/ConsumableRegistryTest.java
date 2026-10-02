@@ -103,6 +103,7 @@ public class ConsumableRegistryTest
 		Assert.assertTrue(ConsumableRegistry.isConsumable(76, "Digsite teleport scroll"));
 		Assert.assertTrue(ConsumableRegistry.isConsumable(77, "Feldip hills teleport scroll"));
 		Assert.assertTrue(ConsumableRegistry.isConsumable(78, "Teleport scroll"));
+		Assert.assertTrue(ConsumableRegistry.isConsumable(79, "Icy basalt"));
 	}
 
 	@Test

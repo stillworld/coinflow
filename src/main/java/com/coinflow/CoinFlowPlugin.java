@@ -28,6 +28,7 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
+import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
@@ -296,10 +297,13 @@ public class CoinFlowPlugin extends Plugin
 	final List<LootPickup> pendingHerbSackPickups = new ArrayList<>();
 	final List<LootPickup> pendingFishBarrelPickups = new ArrayList<>();
 	final List<LootPickup> pendingSeedBoxPickups = new ArrayList<>();
+	final List<LootPickup> pendingLogBasketPickups = new ArrayList<>();
 	final Map<Integer, Integer> invItemsGainedThisTick = new HashMap<>();
 	final Map<Integer, Map<Integer, Integer>> previousPvpKeyContainers = new HashMap<>();
 	int lastSkillingGemId = -1;
 	int lastSkillingGemTick = -100;
+	private WorldPoint lastPlayerLocation;
+	int lastPlayerActivityTick = -100;
 
 	private static final int[] PVP_LOOT_KEY_CONTAINERS = {
 		InventoryID.DEADMAN_LOOT_INV0,
@@ -317,6 +321,10 @@ public class CoinFlowPlugin extends Plugin
 		".+(Grimy .+?) herb.+",
 		Pattern.CASE_INSENSITIVE
 	);
+	private static final Pattern WOODCUTTING_CHOP_REGEX = Pattern.compile(
+		"^(?:You get (?:a|an|some|\\d+)\\s+|You cut (?:a|an|some|\\d+)\\s+).*(?:logs?|bark)",
+		Pattern.CASE_INSENSITIVE
+	);
 
 	// ── Interface IDs that suppress tracking ─────────────────────────────
 	// Maintained via InterfaceTracker; aliases preserved for backward compatibility
@@ -328,7 +336,7 @@ public class CoinFlowPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
-		log.info("Coin Flow started");
+		log.info("Coin Flow {} started", Version.getFormattedVersion());
 		session = CoinFlowSession.createNew();
 		previousInventorySnapshot = null;
 		previousEquipmentSnapshot = null;
@@ -431,6 +439,13 @@ public class CoinFlowPlugin extends Plugin
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
 		int containerId = event.getContainerId();
+
+		if (containerId == InventoryID.INV || containerId == InventoryID.WORN
+			|| containerId == InventoryID.DIZANAS_QUIVER_AMMO
+			|| containerId == net.runelite.api.gameval.InventoryID.LOOTING_BAG)
+		{
+			recordPlayerActivity();
+		}
 
 		if (isPvpKeyContainer(containerId))
 		{
@@ -1054,6 +1069,7 @@ public class CoinFlowPlugin extends Plugin
 		if (prevXp != null && currentXp > prevXp && client != null)
 		{
 			lastSkillXpTicks.put(skill, client.getTickCount());
+			recordPlayerActivity();
 		}
 		previousSkillXp.put(skill, currentXp);
 	}
@@ -1061,6 +1077,7 @@ public class CoinFlowPlugin extends Plugin
 	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
+		recordPlayerActivity();
 		String option = event.getMenuOption();
 		if (option == null)
 		{
@@ -1147,6 +1164,7 @@ public class CoinFlowPlugin extends Plugin
 			}
 		}
 		else if ("Fill".equalsIgnoreCase(option) || "Empty".equalsIgnoreCase(option)
+			|| "Empty basket".equalsIgnoreCase(option)
 			|| "Open".equalsIgnoreCase(option) || "Close".equalsIgnoreCase(option)
 			|| "Charge".equalsIgnoreCase(option) || "Uncharge".equalsIgnoreCase(option))
 		{
@@ -1246,8 +1264,10 @@ public class CoinFlowPlugin extends Plugin
 		boolean canGemBag = hasOpenGemBag(invContainer);
 		boolean canHerbSack = hasOpenHerbSack(invContainer);
 		boolean canSeedBox = hasOpenSeedBox(invContainer);
+		ItemContainer wornContainer = client.getItemContainer(InventoryID.WORN);
+		boolean canLogBasket = hasOpenLogBasket(invContainer, wornContainer);
 
-		if (!canLootBag && !canGemBag && !canHerbSack && !canSeedBox)
+		if (!canLootBag && !canGemBag && !canHerbSack && !canSeedBox && !canLogBasket)
 		{
 			return;
 		}
@@ -1304,6 +1324,10 @@ public class CoinFlowPlugin extends Plugin
 		{
 			pendingSeedBoxPickups.add(new LootPickup(tileItem.getId(), tileItem.getQuantity()));
 		}
+		else if (canLogBasket && comp != null && (ConsumableRegistry.isLog(comp.getName()) || tileItem.getId() == ItemID.HOLLOW_BARK))
+		{
+			pendingLogBasketPickups.add(new LootPickup(tileItem.getId(), tileItem.getQuantity()));
+		}
 		else if (canLootBag)
 		{
 			pendingLootingBagPickups.add(new LootPickup(tileItem.getId(), tileItem.getQuantity()));
@@ -1315,6 +1339,7 @@ public class CoinFlowPlugin extends Plugin
 	{
 		if (client != null && event.getActor() == client.getLocalPlayer())
 		{
+			recordPlayerActivity();
 			int anim = client.getLocalPlayer().getAnimation();
 			if (isFiremakingAnimation(anim))
 			{
@@ -1411,6 +1436,20 @@ public class CoinFlowPlugin extends Plugin
 					}
 				}
 			}
+			else if (WOODCUTTING_CHOP_REGEX.matcher(msg).find())
+			{
+				ItemContainer inv = client != null ? client.getItemContainer(InventoryID.INV) : null;
+				ItemContainer worn = client != null ? client.getItemContainer(InventoryID.WORN) : null;
+				if (hasOpenLogBasket(inv, worn))
+				{
+					int logId = findLogIdInMessage(msg);
+					int qty = parseLogQtyInMessage(msg);
+					if (logId > 0 && qty > 0)
+					{
+						pendingLogBasketPickups.add(new LootPickup(logId, qty));
+					}
+				}
+			}
 			else if (msg.contains("You add the gem") || msg.contains("to your gem bag")
 				|| (msg.contains("gem") && (msg.contains("to your bag") || msg.contains("into your bag")))
 				|| msg.contains("to your gem sack") || msg.contains("to your gem pouch")
@@ -1418,7 +1457,12 @@ public class CoinFlowPlugin extends Plugin
 				|| msg.contains("into your herb sack") || msg.contains("to your herb sack")
 				|| msg.contains("into your seed box") || msg.contains("to your seed box")
 				|| msg.contains("The fish barrel is now full") || msg.contains("The seed box is full")
-				|| msg.contains("The herb sack is full"))
+				|| msg.contains("The herb sack is full")
+				|| msg.contains("The basket is full")
+				|| msg.contains("into the Forestry basket") || msg.contains("into the log basket")
+				|| msg.contains("into your Forestry basket") || msg.contains("into your log basket")
+				|| msg.contains("to your Forestry basket") || msg.contains("to your log basket")
+				|| msg.contains("You empty your basket") || msg.contains("You empty as many logs as you can carry"))
 			{
 				interfaceTracker.setNeedsRebaseline(true);
 				rebaselineGraceTicks = Math.max(rebaselineGraceTicks, 2);
@@ -1824,6 +1868,98 @@ public class CoinFlowPlugin extends Plugin
 		return 1;
 	}
 
+	static int findLogIdInMessage(String msg)
+	{
+		String lower = msg.toLowerCase(Locale.ROOT);
+		if (lower.contains("arctic pine"))
+		{
+			return ItemID.ARCTIC_PINE_LOG;
+		}
+		if (lower.contains("redwood"))
+		{
+			return ItemID.REDWOOD_LOGS;
+		}
+		if (lower.contains("magic"))
+		{
+			return ItemID.MAGIC_LOGS;
+		}
+		if (lower.contains("yew"))
+		{
+			return ItemID.YEW_LOGS;
+		}
+		if (lower.contains("maple"))
+		{
+			return ItemID.MAPLE_LOGS;
+		}
+		if (lower.contains("mahogany"))
+		{
+			return ItemID.MAHOGANY_LOGS;
+		}
+		if (lower.contains("teak"))
+		{
+			return ItemID.TEAK_LOGS;
+		}
+		if (lower.contains("willow"))
+		{
+			return ItemID.WILLOW_LOGS;
+		}
+		if (lower.contains("oak"))
+		{
+			return ItemID.OAK_LOGS;
+		}
+		if (lower.contains("juniper"))
+		{
+			return ItemID.JUNIPER_LOGS;
+		}
+		if (lower.contains("blisterwood"))
+		{
+			return ItemID.BLISTERWOOD_LOGS;
+		}
+		if (lower.contains("achey"))
+		{
+			return ItemID.ACHEY_TREE_LOGS;
+		}
+		if (lower.contains("camphor"))
+		{
+			return ItemID.CAMPHOR_LOGS;
+		}
+		if (lower.contains("ironwood"))
+		{
+			return ItemID.IRONWOOD_LOGS;
+		}
+		if (lower.contains("rosewood"))
+		{
+			return ItemID.ROSEWOOD_LOGS;
+		}
+		if (lower.contains("jatoba"))
+		{
+			return ItemID.JATOBA_LOGS;
+		}
+		if (lower.contains("bark"))
+		{
+			return ItemID.HOLLOW_BARK;
+		}
+		if (lower.contains("logs") || lower.contains("log"))
+		{
+			return ItemID.LOGS;
+		}
+		return -1;
+	}
+
+	static int parseLogQtyInMessage(String msg)
+	{
+		Matcher m = Pattern.compile("You (?:get|cut) (\\d+)", Pattern.CASE_INSENSITIVE).matcher(msg);
+		if (m.find())
+		{
+			try
+			{
+				return Integer.parseInt(m.group(1));
+			}
+			catch (NumberFormatException ignored) {}
+		}
+		return 1;
+	}
+
 	private static boolean isPvpKeyContainer(int containerId)
 	{
 		for (int id : PVP_LOOT_KEY_CONTAINERS)
@@ -1891,6 +2027,7 @@ public class CoinFlowPlugin extends Plugin
 			|| lowerTarget.contains("gem pouch") || lowerTarget.contains("gem satchel") || lowerTarget.contains("gem tote")
 			|| lowerTarget.contains("herb sack")
 			|| lowerTarget.contains("fish barrel") || lowerTarget.contains("fish sack barrel")
+			|| lowerTarget.contains("log basket") || lowerTarget.contains("forestry basket")
 			|| lowerTarget.contains("seed box")
 			|| lowerTarget.contains("ash sanctifier")
 			|| lowerTarget.contains("bonecrusher")
@@ -1978,6 +2115,7 @@ public class CoinFlowPlugin extends Plugin
 			pendingHerbSackPickups.clear();
 			pendingFishBarrelPickups.clear();
 			pendingSeedBoxPickups.clear();
+			pendingLogBasketPickups.clear();
 			invItemsGainedThisTick.clear();
 			return;
 		}
@@ -2071,6 +2209,21 @@ public class CoinFlowPlugin extends Plugin
 			}
 			pendingSeedBoxPickups.clear();
 		}
+
+		// Finalize pending log basket pickups
+		if (!pendingLogBasketPickups.isEmpty())
+		{
+			if (client != null)
+			{
+				ItemContainer invContainer = client.getItemContainer(InventoryID.INV);
+				ItemContainer wornContainer = client.getItemContainer(InventoryID.WORN);
+				if (hasOpenLogBasket(invContainer, wornContainer))
+				{
+					drainPendingContainerPickups(pendingLogBasketPickups);
+				}
+			}
+			pendingLogBasketPickups.clear();
+		}
 		invItemsGainedThisTick.clear();
 		matchedUnequipsThisTick.clear();
 
@@ -2114,7 +2267,7 @@ public class CoinFlowPlugin extends Plugin
 		}
 
 		// Update idle state and time tracking on each tick
-		session = session.tick(config.idleTimeoutMinutes());
+		session = session.tick(config.idleTimeoutMinutes(), isPlayerActive());
 
 		// Decrement rebaseline grace window after interface closures
 		if (rebaselineGraceTicks > 0)
@@ -2157,6 +2310,64 @@ public class CoinFlowPlugin extends Plugin
 		{
 			panel.updateSession(session);
 		}
+	}
+
+	void recordPlayerActivity()
+	{
+		if (client != null)
+		{
+			lastPlayerActivityTick = client.getTickCount();
+		}
+		if (session != null && session.isIdle())
+		{
+			session = session.withActivity();
+		}
+	}
+
+	boolean isPlayerActive()
+	{
+		if (client == null || client.getGameState() != GameState.LOGGED_IN)
+		{
+			return false;
+		}
+
+		Player localPlayer = client.getLocalPlayer();
+		if (localPlayer == null)
+		{
+			return false;
+		}
+
+		// 1. Movement: World location changed since last tick
+		WorldPoint currentLoc = localPlayer.getWorldLocation();
+		boolean moved = false;
+		if (currentLoc != null)
+		{
+			moved = lastPlayerLocation != null && !lastPlayerLocation.equals(currentLoc);
+			lastPlayerLocation = currentLoc;
+		}
+
+		// 2. Walking/running animation pose (differs from standing idle pose)
+		boolean movingPose = localPlayer.getPoseAnimation() != localPlayer.getIdlePoseAnimation();
+
+		// 3. Action animation (woodcutting, mining, combat, casting, etc.)
+		boolean animating = localPlayer.getAnimation() != -1;
+
+		// 4. Recent user-triggered action (menu click, item container change, XP drop within last 2 ticks)
+		int currentTick = client.getTickCount();
+		int diff = currentTick - lastPlayerActivityTick;
+		boolean recentAction = diff >= 0 && diff <= 2;
+
+		// 5. Direct input: mouse moved or key pressed recently (< 50 client cycles / ~1 sec)
+		boolean activeInput = false;
+		try
+		{
+			activeInput = client.getMouseIdleTicks() < 50 || client.getKeyboardIdleTicks() < 50;
+		}
+		catch (Throwable ignored)
+		{
+		}
+
+		return moved || movingPose || animating || recentAction || activeInput;
 	}
 
 	@Subscribe
@@ -2467,6 +2678,11 @@ public class CoinFlowPlugin extends Plugin
 		return getSnapshotService().hasOpenFishBarrel(invContainer, wornContainer);
 	}
 
+	boolean hasOpenLogBasket(ItemContainer invContainer, ItemContainer wornContainer)
+	{
+		return getSnapshotService().hasOpenLogBasket(invContainer, wornContainer);
+	}
+
 	boolean hasOpenSeedBox(ItemContainer invContainer)
 	{
 		return getSnapshotService().hasOpenSeedBox(invContainer);
@@ -2696,9 +2912,12 @@ public class CoinFlowPlugin extends Plugin
 				itemName, quantity, price, (long) quantity * price);
 		}
 
-		if (!trackedGains.isEmpty() || !droppedGainsDeductions.isEmpty() || !supplyExpenses.isEmpty())
+		Map<Integer, CoinFlowSession.TrackedItem> effectiveExpenses =
+			(config != null && !config.trackSpent()) ? Collections.emptyMap() : supplyExpenses;
+
+		if (!trackedGains.isEmpty() || !droppedGainsDeductions.isEmpty() || !effectiveExpenses.isEmpty())
 		{
-			session = session.withGainsLossesAndExpenses(trackedGains, droppedGainsDeductions, supplyExpenses);
+			session = session.withGainsLossesAndExpenses(trackedGains, droppedGainsDeductions, effectiveExpenses);
 
 			// Gold drops are kept purely for positive income to prevent screen clutter
 			if (config.showGoldDrops() && goldDropOverlay != null && !trackedGains.isEmpty())
@@ -2781,7 +3000,11 @@ public class CoinFlowPlugin extends Plugin
 			return;
 		}
 
-		if (session != null && session.getTotalProfit() >= goalAmount)
+		long currentProfit = (session != null && config != null && !config.trackSpent())
+			? session.getGrossProfit()
+			: (session != null ? session.getTotalProfit() : 0L);
+
+		if (session != null && currentProfit >= goalAmount)
 		{
 			if (!goalCompletedNotified)
 			{
@@ -2812,6 +3035,7 @@ public class CoinFlowPlugin extends Plugin
 		pendingHerbSackPickups.clear();
 		pendingFishBarrelPickups.clear();
 		pendingSeedBoxPickups.clear();
+		pendingLogBasketPickups.clear();
 		invItemsGainedThisTick.clear();
 		matchedUnequipsThisTick.clear();
 		previousPvpKeyContainers.clear();
@@ -2837,6 +3061,8 @@ public class CoinFlowPlugin extends Plugin
 		lastLootingBagDepositItemId = -1;
 		lastLootingBagDepositItemName = null;
 		rebaselineGraceTicks = 0;
+		lastPlayerLocation = null;
+		lastPlayerActivityTick = -100;
 		if (goldDropOverlay != null)
 		{
 			goldDropOverlay.clear();

@@ -206,4 +206,38 @@ A running live list of manual verification scenarios to test in-game before hub 
 - [ ] **Ash Scattering in Combat**: Kill an ash-dropping monster with an Ash Sanctifier in inventory → Sanctifier consumes 1 Death rune charge to scatter ashes into Prayer XP; 1 Death rune is recorded as a supply expense; scattered ashes are not credited as physical loot.
 - [ ] **Bonecrusher Prayer Conversion (Negative Test)**: Kill a bone-dropping monster with a Bonecrusher or Bonecrusher necklace in inventory/worn → Bones crushed directly into Prayer XP do not enter physical inventory; no physical loot is falsely recorded.
 
+---
 
+## 22. Forestry Basket & Log Basket (Open & Closed)
+- [ ] **Woodcutting into Open Forestry Basket / Log Basket**: Carry or equip an open Forestry Basket (`Open forestry basket`) or Log Basket (`Open log basket`) and chop any tree (Oak, Willow, Teak, Maple, Mahogany, Yew, Magic, Redwood, etc.) → Logs automatically enter the basket; profit and gold drops are immediately credited to session metrics without requiring logs to sit in the main inventory.
+- [ ] **Woodcutting Perk / Double Log Procs**: Chop trees with a Woodcutting cape or Forestry 2h axe yielding multiple logs (e.g. "You get 2 yew logs.") → All logs deposited into the basket are credited at their full quantity.
+- [ ] **Basket Overflow to Inventory**: Chop trees with a completely full basket (28 logs) → Excess logs spill into standard inventory and are counted exactly once without duplicate profit.
+- [ ] **Direct Ground Pickup into Basket**: Pick up logs from the ground while carrying/wearing an open basket → Logs enter the basket directly and are credited to session profit.
+- [ ] **Emptying Basket (Negative Test)**: Click "Empty" or "Empty basket" on a Forestry Basket or Log Basket outside a bank, or deposit logs at a bank or Woodcutting Leprechaun → Rebaseline grace window ensures no duplicate profit when dumping logs out.
+- [ ] **Toggling Open / Closed (Negative Test)**: Click "Open" or "Close" on a Forestry Basket or Log Basket in inventory or worn cape slot → Normalized item ID ensures zero false profit or loss recorded.
+- [ ] **Forestry Kit / Basket Interface Suppression (Negative Test)**: Open the Forestry Kit interface (`InterfaceID.FORESTRY_KIT_MAIN` / `FORESTRY_KIT_SIDE`) → Session tracking is cleanly suppressed; closing the interface causes zero churn.
+
+---
+
+## 23. Gross Tracking & Track Spent Toggle
+- [ ] **Disable Track Spent in Config**: Open CoinFlow settings and toggle off "Track Spent" → Side panel immediately switches title to "Profit", removes "Gross Loot:" and "Spent:" rows from standard view, and displays gross profit and gross GP/hr.
+- [ ] **Overlay with Track Spent Disabled**: While "Track Spent" is disabled, examine HUD overlay → Overlay displays "Profit:", omits the "Spent:" line, and calculates GP/Hour based on gross loot gains.
+- [ ] **Consumables in Gross Tracking Mode**: Sip a potion, eat food, use teleport tablets, or fire ammo with "Track Spent" disabled → Zero supply expense is recorded in the session; net profit remains equal to gross profit.
+- [ ] **Looting in Gross Tracking Mode**: Pick up monster drops or skilling products with "Track Spent" disabled → Gross loot is credited normally and gold drops trigger as expected.
+- [ ] **Mid-Session Toggle**: Toggle "Track Spent" on and off during an active session with prior expenses → UI seamlessly swaps between Net Profit (with Spent breakdown) and Gross Profit without resetting or corrupting session data.
+- [ ] **Goal Tracking in Gross Mode**: Set a target GP goal with "Track Spent" disabled → Goal progress bar, remaining GP, and ETA are calculated against gross profit rather than net profit.
+
+---
+
+## 24. Plugin Versioning & Startup
+- [ ] **In-Game Version Display**: Launch client and inspect Coin Flow panel header subtitle (`Live GP/hr & Goals · v1.0.0`) and startup log (`Coin Flow v1.0.0 started`) → Correctly displays the active version.
+- [ ] **Panel Header Tooltip**: Hover over the "Coin Flow" title in the sidebar panel → Tooltip displays `Coin Flow v1.0.0`.
+
+---
+
+## 25. Session Summary Dashboard & Reset Settings
+- [ ] **Finish Session / Reset Button (Toggle ON)**: Enable "Display Summary on Reset" in config, then click "Finish Session / Reset" on an active session → Displays the modal Session Summary dashboard showing Net/Gross profit, GP/hr rates, downtime & bankstanding audit, top revenue sources, and biggest cost sinks.
+- [ ] **Continue Session**: In the summary dialog, click "Continue Session" → Dialog closes without resetting or losing any session data.
+- [ ] **Finish & Reset Session**: In the summary dialog, click "Finish & Reset Session" → Dialog closes and cleanly resets the active session.
+- [ ] **Default Reset Behavior (Toggle OFF)**: With "Display Summary on Reset" disabled (default), click "Finish Session / Reset" (or compact "Reset") → Prompts the standard confirmation dialog ("Reset active Coin Flow session and counters?") without opening the summary dialog.
+- [ ] **Reset on Empty Session (Negative Test)**: With "Display Summary on Reset" enabled, click "Finish Session / Reset" on a freshly cleared session (0 gains, 0 expenses, < 30s) → Prompts the standard confirmation dialog rather than displaying an empty summary dashboard.

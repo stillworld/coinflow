@@ -400,7 +400,8 @@ public final class ConsumableRegistry
 		}
 
 		// 5. Teleports (tablets and scrolls)
-		if (lower.contains("teleport") || lower.endsWith(" tab") || lower.endsWith(" tabs"))
+		if (lower.contains("teleport") || lower.endsWith(" tab") || lower.endsWith(" tabs")
+			|| lower.endsWith("basalt") && !lower.equals("basalt"))
 		{
 			if (NON_CONSUMABLE_TELEPORT_SCROLLS.contains(lower)
 				|| lower.contains("home teleport")

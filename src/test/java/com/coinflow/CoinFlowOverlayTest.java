@@ -30,6 +30,7 @@ public class CoinFlowOverlayTest
 		graphics = img.createGraphics();
 
 		when(config.showOverlay()).thenReturn(true);
+		when(config.trackSpent()).thenReturn(true);
 		when(config.showGoalOverlay()).thenReturn(false);
 		when(config.goalAmount()).thenReturn("");
 		when(config.goalName()).thenReturn("");
@@ -67,6 +68,7 @@ public class CoinFlowOverlayTest
 
 		CoinFlowSession session = CoinFlowSession.createNew().withGains(gains);
 		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(false);
 
 		overlay.setClearChildren(false);
 		Dimension result = overlay.render(graphics);
@@ -77,5 +79,61 @@ public class CoinFlowOverlayTest
 		// When item breakdown was in the overlay, it rendered 4 + 8 + 1 ("more...") = 13 children.
 		int childCount = overlay.getPanelComponent().getChildren().size();
 		Assert.assertEquals("Overlay must only contain session summary lines and no item breakdown rows", 4, childCount);
+	}
+
+	@Test
+	public void render_trackSpentTrue_showsNetProfitAndSpentWhenExpensesPresent()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(Collections.singletonMap(1, new CoinFlowSession.TrackedItem(1, "Shark", 10, 1000L)))
+			.withExpenses(Collections.singletonMap(2, new CoinFlowSession.TrackedItem(2, "Prayer potion(4)", 1, 2000L)));
+
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(true);
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		// When trackSpent is true and expenses > 0:
+		// 5 children: Title, Net Profit, Spent, GP/Hour, Time
+		Assert.assertEquals(5, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void render_trackSpentFalse_showsGrossProfitAndHidesSpent()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(Collections.singletonMap(1, new CoinFlowSession.TrackedItem(1, "Shark", 10, 1000L)))
+			.withExpenses(Collections.singletonMap(2, new CoinFlowSession.TrackedItem(2, "Prayer potion(4)", 1, 2000L)));
+
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(false);
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		// When trackSpent is false:
+		// 4 children: Title, Profit, GP/Hour, Time (Spent row is omitted)
+		Assert.assertEquals(4, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void render_trackSpentTrue_zeroExpenses_showsNetProfitAndSpent()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(Collections.singletonMap(1, new CoinFlowSession.TrackedItem(1, "Shark", 10, 1000L)));
+
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(true);
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		// When trackSpent is true even with 0 expenses:
+		// 5 children: Title, Net Profit, Spent, GP/Hour, Time
+		Assert.assertEquals(5, overlay.getPanelComponent().getChildren().size());
 	}
 }

@@ -194,6 +194,7 @@ public class GoalModeTest
 		org.mockito.Mockito.when(config.compactMode()).thenReturn(false);
 		org.mockito.Mockito.when(config.sessionCardCollapsed()).thenReturn(false);
 		org.mockito.Mockito.when(config.goalCardCollapsed()).thenReturn(false);
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
 
 		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
 		panel.init();
@@ -227,6 +228,7 @@ public class GoalModeTest
 		org.mockito.Mockito.when(config.goalCardCollapsed()).thenReturn(false);
 		org.mockito.Mockito.when(config.itemsCardCollapsed()).thenReturn(false);
 		org.mockito.Mockito.when(config.showItemBreakdown()).thenReturn(true);
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
 
 		CoinFlowSession session = CoinFlowSession.createNew()
 			.withGains(java.util.Collections.singletonMap(453, new CoinFlowSession.TrackedItem(453, "Coal", 10, 150L)));
@@ -273,5 +275,41 @@ public class GoalModeTest
 			panel.getScrollPane().getViewport().setViewPosition(new java.awt.Point(25, 0));
 			Assert.assertEquals(0, panel.getScrollPane().getViewport().getViewPosition().x);
 		}
+	}
+
+	@Test
+	public void testPanelTrackSpentToggle_rebuildsLayoutAndRefreshesView() throws Exception
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		org.mockito.Mockito.when(config.goalAmount()).thenReturn("50000");
+		org.mockito.Mockito.when(config.goalName()).thenReturn("Test Goal");
+		org.mockito.Mockito.when(config.compactMode()).thenReturn(false);
+		org.mockito.Mockito.when(config.sessionCardCollapsed()).thenReturn(false);
+		org.mockito.Mockito.when(config.goalCardCollapsed()).thenReturn(false);
+		org.mockito.Mockito.when(config.itemsCardCollapsed()).thenReturn(false);
+		org.mockito.Mockito.when(config.showItemBreakdown()).thenReturn(true);
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
+
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(java.util.Collections.singletonMap(453, new CoinFlowSession.TrackedItem(453, "Coal", 100, 150L)))
+			.withExpenses(java.util.Collections.singletonMap(2, new CoinFlowSession.TrackedItem(2, "Prayer potion", 1, 5000L)));
+
+		org.mockito.Mockito.when(plugin.getSession()).thenReturn(session);
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+		panel.updateSession(session);
+
+		// Toggle trackSpent off
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(false);
+		panel.onConfigChanged();
+
+		// Toggle trackSpent back on
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
+		panel.onConfigChanged();
 	}
 }
