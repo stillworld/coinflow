@@ -74,9 +74,10 @@ public class CoinFlowOverlay extends OverlayPanel
 			.build());
 
 		// ── Profit & Supplies (Dynamic Unified Display) ──────────────
-		long totalExpenses = session.getTotalExpenses();
-		long totalProfit = session.getTotalProfit();
-		String profitLabel = totalExpenses > 0 ? "Net Profit:" : "Profit:";
+		boolean trackSpent = config.trackSpent();
+		long totalExpenses = trackSpent ? session.getTotalExpenses() : 0L;
+		long totalProfit = trackSpent ? session.getTotalProfit() : session.getGrossProfit();
+		String profitLabel = trackSpent ? "Net Profit:" : "Profit:";
 		String totalProfitRight = (totalProfit < 0 ? "-" : "") + formatGp(Math.abs(totalProfit)) + " gp";
 		Color profitColor = totalProfit < 0 ? LOSS_COLOR : PROFIT_COLOR;
 
@@ -88,21 +89,22 @@ public class CoinFlowOverlay extends OverlayPanel
 			.rightColor(profitColor)
 			.build());
 
-		if (totalExpenses > 0)
+		if (trackSpent)
 		{
 			String spentLeft = "Spent:";
-			String spentRight = "-" + formatGp(totalExpenses) + " gp";
+			String spentRight = (totalExpenses > 0 ? "-" : "") + formatGp(totalExpenses) + " gp";
+			Color spentColor = totalExpenses > 0 ? LOSS_COLOR : LABEL_COLOR;
 			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(spentLeft) + fontMetrics.stringWidth(spentRight) + COLUMN_SPACING);
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(spentLeft)
 				.leftColor(LABEL_COLOR)
 				.right(spentRight)
-				.rightColor(LOSS_COLOR)
+				.rightColor(spentColor)
 				.build());
 		}
 
 		// ── GP/Hour ──────────────────────────────────────────────────
-		long gpPerHour = session.getGpPerHour(includeAfk);
+		long gpPerHour = trackSpent ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
 		String gpHrLeft = "GP/Hour:";
 		String gpHrRight = (gpPerHour < 0 ? "-" : "") + formatGp(Math.abs(gpPerHour)) + " gp/hr";
 		Color gpHrColor = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
@@ -131,9 +133,9 @@ public class CoinFlowOverlay extends OverlayPanel
 		long goalAmount = CoinFlowSession.parseGoalAmount(config.goalAmount());
 		if (config.showGoalOverlay() && goalAmount > 0)
 		{
-			double progress = session.getGoalProgress(goalAmount);
+			double progress = session.getGoalProgress(goalAmount, trackSpent);
 			boolean isGoalComplete = progress >= 1.0;
-			long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk);
+			long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk, trackSpent);
 			String etaStr = CoinFlowSession.formatGoalEta(etaSeconds);
 
 			String goalName = CoinFlowSession.cleanGoalName(config.goalName());
@@ -149,7 +151,7 @@ public class CoinFlowOverlay extends OverlayPanel
 			progressBar = new ProgressBarComponent();
 			progressBar.setMinimum(0);
 			progressBar.setMaximum(goalAmount);
-			progressBar.setValue(Math.min((double) goalAmount, Math.max(0.0, (double) session.getTotalProfit())));
+			progressBar.setValue(Math.min((double) goalAmount, Math.max(0.0, (double) totalProfit)));
 			progressBar.setLabelDisplayMode(ProgressBarComponent.LabelDisplayMode.TEXT_ONLY);
 			progressBar.setCenterLabel(barCenterText);
 			progressBar.setForegroundColor(isGoalComplete ? GOAL_COMPLETE_COLOR : GOAL_IN_PROGRESS_COLOR);

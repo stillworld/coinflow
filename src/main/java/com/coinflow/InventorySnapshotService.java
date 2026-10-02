@@ -129,6 +129,14 @@ public class InventorySnapshotService
 				{
 					id = ItemID.FISH_SACK_BARREL_CLOSED;
 				}
+				else if (id == ItemID.LOG_BASKET_OPEN)
+				{
+					id = ItemID.LOG_BASKET_CLOSED;
+				}
+				else if (id == ItemID.FORESTRY_BASKET_OPEN)
+				{
+					id = ItemID.FORESTRY_BASKET_CLOSED;
+				}
 				ids[i] = id;
 				qtys[i] = item.getQuantity();
 			}
@@ -231,6 +239,14 @@ public class InventorySnapshotService
 				else if (id == ItemID.SEED_BOX_OPEN)
 				{
 					id = ItemID.SEED_BOX;
+				}
+				else if (id == ItemID.LOG_BASKET_OPEN)
+				{
+					id = ItemID.LOG_BASKET_CLOSED;
+				}
+				else if (id == ItemID.FORESTRY_BASKET_OPEN)
+				{
+					id = ItemID.FORESTRY_BASKET_CLOSED;
 				}
 				else if (isAshSanctifier(id))
 				{
@@ -778,6 +794,79 @@ public class InventorySnapshotService
 			for (Item item : wornContainer.getItems())
 			{
 				if (item != null && isOpenFishBarrel(item.getId()))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Returns true if the item ID matches any variant of the Log Basket or Forestry Basket.
+	 */
+	public static boolean isLogBasket(int itemId)
+	{
+		return itemId == ItemID.LOG_BASKET_CLOSED || itemId == ItemID.LOG_BASKET_OPEN
+			|| itemId == ItemID.FORESTRY_BASKET_CLOSED || itemId == ItemID.FORESTRY_BASKET_OPEN;
+	}
+
+	/**
+	 * Returns true if the item ID matches an open Log Basket or Forestry Basket variant.
+	 */
+	public static boolean isOpenLogBasket(int itemId)
+	{
+		return itemId == ItemID.LOG_BASKET_OPEN || itemId == ItemID.FORESTRY_BASKET_OPEN;
+	}
+
+	/**
+	 * Checks if inventory or worn equipment holds any variant of the Log Basket or Forestry Basket.
+	 */
+	public boolean hasLogBasket(ItemContainer invContainer, ItemContainer wornContainer)
+	{
+		if (invContainer != null && invContainer.getItems() != null)
+		{
+			for (Item item : invContainer.getItems())
+			{
+				if (item != null && isLogBasket(item.getId()))
+				{
+					return true;
+				}
+			}
+		}
+		if (wornContainer != null && wornContainer.getItems() != null)
+		{
+			for (Item item : wornContainer.getItems())
+			{
+				if (item != null && isLogBasket(item.getId()))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Checks if inventory or worn equipment holds an open variant of the Log Basket or Forestry Basket.
+	 */
+	public boolean hasOpenLogBasket(ItemContainer invContainer, ItemContainer wornContainer)
+	{
+		if (invContainer != null && invContainer.getItems() != null)
+		{
+			for (Item item : invContainer.getItems())
+			{
+				if (item != null && isOpenLogBasket(item.getId()))
+				{
+					return true;
+				}
+			}
+		}
+		if (wornContainer != null && wornContainer.getItems() != null)
+		{
+			for (Item item : wornContainer.getItems())
+			{
+				if (item != null && isOpenLogBasket(item.getId()))
 				{
 					return true;
 				}

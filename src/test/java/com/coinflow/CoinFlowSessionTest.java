@@ -261,6 +261,32 @@ public class CoinFlowSessionTest
 	}
 
 	@Test
+	public void withActivity_resetsIdleState()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew();
+		session = session.tick(0); // go idle
+		Assert.assertTrue(session.isIdle());
+
+		session = session.withActivity();
+		Assert.assertFalse("withActivity should reset idle state", session.isIdle());
+	}
+
+	@Test
+	public void tick_withPlayerActive_clearsAndPreventsIdleState()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew();
+		session = session.tick(0); // go idle
+		Assert.assertTrue(session.isIdle());
+
+		// Next tick with playerActive=true should clear idle and accumulate active time
+		Duration beforeActive = session.getActiveTime();
+		session = session.tick(0, true);
+		Assert.assertFalse("Active player tick should clear idle state", session.isIdle());
+		Assert.assertTrue("Active time should accumulate during active tick",
+			session.getActiveTime().compareTo(beforeActive) > 0);
+	}
+
+	@Test
 	public void getTime_returnsActiveOrTotalBasedOnFlag()
 	{
 		CoinFlowSession session = simulateTicks(CoinFlowSession.createNew(), 3, 999);
@@ -464,5 +490,32 @@ public class CoinFlowSessionTest
 		Assert.assertEquals(10_000L, session.getTotalExpenses());
 		Assert.assertEquals(-10_000L, session.getNetProfit());
 		Assert.assertEquals(-10_000L, session.getTotalProfit());
+	}
+
+	@Test
+	public void grossGpPerHour_and_grossGoalCalculations()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGainsAndExpenses(
+				gains(1, "Runite ore", 10, 10_000L), // +100k gross
+				gains(2, "Prayer potion", 1, 20_000L) // -20k expenses -> 80k net
+			)
+			.withDurations(java.time.Duration.ofHours(1), java.time.Duration.ofHours(1));
+
+		long netGpHr = session.getGpPerHour(false);
+		long grossGpHr = session.getGrossGpPerHour(false);
+		Assert.assertEquals(80_000L, netGpHr);
+		Assert.assertEquals(100_000L, grossGpHr);
+		Assert.assertTrue("Gross GP/hr should be greater than Net GP/hr when expenses exist", grossGpHr > netGpHr);
+
+		long goal = 100_000L;
+		// With trackSpent = true (net tracking): 80k net profit -> 20k remaining, 80% progress
+		Assert.assertEquals(20_000L, session.getGoalRemaining(goal, true));
+		Assert.assertEquals(0.8, session.getGoalProgress(goal, true), 0.001);
+
+		// With trackSpent = false (gross tracking): 100k gross profit -> 0 remaining, 100% progress
+		Assert.assertEquals(0L, session.getGoalRemaining(goal, false));
+		Assert.assertEquals(1.0, session.getGoalProgress(goal, false), 0.001);
+		Assert.assertEquals(0L, session.getGoalEtaSeconds(goal, false, false));
 	}
 }

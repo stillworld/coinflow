@@ -80,6 +80,8 @@ public class InterfaceTracker
 		InterfaceID.TACKLE_BOX_SIDE,
 		InterfaceID.II_ELNOCK_STORAGE,
 		InterfaceID.II_ELNOCK_STORAGE_SIDE,
+		InterfaceID.FORESTRY_KIT_MAIN,
+		InterfaceID.FORESTRY_KIT_SIDE,
 
 		// PvP Loot Chests
 		InterfaceID.WILDY_LOOT_CHEST,
@@ -105,7 +107,8 @@ public class InterfaceTracker
 		InterfaceID.FOSSIL_STORAGE_INV,
 		InterfaceID.POH_COSTUMES_SIDE,
 		InterfaceID.TACKLE_BOX_SIDE,
-		InterfaceID.II_ELNOCK_STORAGE_SIDE
+		InterfaceID.II_ELNOCK_STORAGE_SIDE,
+		InterfaceID.FORESTRY_KIT_SIDE
 	)));
 
 	@Getter

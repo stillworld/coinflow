@@ -7,6 +7,7 @@ import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
@@ -75,13 +76,14 @@ public class CoinFlowPanel extends PluginPanel
 	// ── Session Summary UI ───────────────────────────────────────────────
 	private final JPanel sessionCard = new JPanel();
 	private final JLabel sessionCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
+	private final JLabel sessionProfitCaption = new JLabel("Net Profit", SwingConstants.CENTER);
 	private final JLabel sessionProfitLabel = new JLabel("0 gp", SwingConstants.CENTER);
 	private final JLabel sessionRateLabel = new JLabel("0 gp/hr", SwingConstants.RIGHT);
 	private final JLabel sessionTimeLabel = new JLabel("00:00", SwingConstants.RIGHT);
-	private final JLabel sessionGrossLabel = new JLabel("0 gp", SwingConstants.RIGHT);
+	private final JLabel sessionGrossLabel = new JLabel("+0 gp", SwingConstants.RIGHT);
 	private final JLabel sessionSuppliesLabel = new JLabel("0 gp", SwingConstants.RIGHT);
 	private final JPanel sessionStatsGrid = new JPanel(new GridLayout(2, 2, 6, 4));
-	private final JButton standardResetButton = new JButton("Reset Session");
+	private final JButton finishSessionButton = new JButton("Finish Session / Reset");
 	private final JButton compactResetButton = new JButton("Reset");
 
 	// ── Goal UI Components ───────────────────────────────────────────────
@@ -124,7 +126,9 @@ public class CoinFlowPanel extends PluginPanel
 	private boolean lastGoalCollapsed = false;
 	private boolean lastItemsCardCollapsed = false;
 	private boolean lastShowItemBreakdown = true;
+	private boolean lastTrackSpent = true;
 	private Map<Integer, CoinFlowSession.TrackedItem> lastRenderedItems = null;
+	private Map<Integer, CoinFlowSession.TrackedItem> lastRenderedExpenses = null;
 
 	@Inject
 	public CoinFlowPanel(
@@ -138,6 +142,7 @@ public class CoinFlowPanel extends PluginPanel
 		this.config = config;
 		this.configManager = configManager;
 		this.itemManager = itemManager;
+		this.lastTrackSpent = config.trackSpent();
 	}
 
 	private boolean initialized = false;
@@ -286,21 +291,21 @@ public class CoinFlowPanel extends PluginPanel
 
 		sessionCollapsedPreviewLabel.setFont(FontManager.getRunescapeSmallFont());
 
-		styleButton(standardResetButton);
-		standardResetButton.setPreferredSize(new Dimension(0, 26));
-		for (java.awt.event.ActionListener al : standardResetButton.getActionListeners())
+		styleButton(finishSessionButton);
+		finishSessionButton.setPreferredSize(new Dimension(0, 26));
+		for (java.awt.event.ActionListener al : finishSessionButton.getActionListeners())
 		{
-			standardResetButton.removeActionListener(al);
+			finishSessionButton.removeActionListener(al);
 		}
-		standardResetButton.addActionListener(e -> promptResetSession());
+		finishSessionButton.addActionListener(e -> onFinishSessionClicked());
 
 		styleButton(compactResetButton);
-		compactResetButton.setPreferredSize(new Dimension(46, 20));
+		compactResetButton.setPreferredSize(new Dimension(48, 20));
 		for (java.awt.event.ActionListener al : compactResetButton.getActionListeners())
 		{
 			compactResetButton.removeActionListener(al);
 		}
-		compactResetButton.addActionListener(e -> promptResetSession());
+		compactResetButton.addActionListener(e -> onFinishSessionClicked());
 	}
 
 	private void initGoalComponents()
@@ -391,11 +396,12 @@ public class CoinFlowPanel extends PluginPanel
 		JLabel title = new JLabel("Coin Flow");
 		title.setFont(FontManager.getRunescapeBoldFont());
 		title.setForeground(ACCENT_GOLD);
+		title.setToolTipText("Coin Flow " + Version.getFormattedVersion());
 		titleBox.add(title, BorderLayout.NORTH);
 
 		if (!compact)
 		{
-			JLabel subtitle = new JLabel("Live GP/hr & Goals");
+			JLabel subtitle = new JLabel("Live GP/hr & Goals · " + Version.getFormattedVersion());
 			subtitle.setFont(FontManager.getRunescapeSmallFont());
 			subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 			titleBox.add(subtitle, BorderLayout.SOUTH);
@@ -426,7 +432,9 @@ public class CoinFlowPanel extends PluginPanel
 
 		boolean compact = config.compactMode();
 		boolean collapsed = config.sessionCardCollapsed();
+		lastCompactMode = compact;
 		lastSessionCollapsed = collapsed;
+		lastTrackSpent = config.trackSpent();
 
 		sessionCard.setBorder(BorderFactory.createCompoundBorder(
 			BorderFactory.createMatteBorder(1, 1, 1, 1, ColorScheme.DARK_GRAY_HOVER_COLOR),
@@ -476,13 +484,15 @@ public class CoinFlowPanel extends PluginPanel
 
 	private void buildStandardSessionBody(JPanel card, GridBagConstraints c)
 	{
+		boolean trackSpent = config.trackSpent();
+
 		// Net Profit Caption
-		JLabel profitCaption = new JLabel("Net Profit", SwingConstants.CENTER);
-		profitCaption.setFont(FontManager.getRunescapeSmallFont());
-		profitCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-		profitCaption.setHorizontalAlignment(SwingConstants.CENTER);
+		sessionProfitCaption.setText(trackSpent ? "Net Profit" : "Profit");
+		sessionProfitCaption.setFont(FontManager.getRunescapeSmallFont());
+		sessionProfitCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		sessionProfitCaption.setHorizontalAlignment(SwingConstants.CENTER);
 		c.insets = new Insets(0, 0, 2, 0);
-		card.add(profitCaption, c);
+		card.add(sessionProfitCaption, c);
 		c.gridy++;
 
 		// Profit Value
@@ -495,7 +505,7 @@ public class CoinFlowPanel extends PluginPanel
 		// Rate, Time, Gross Loot & Supplies Grid
 		sessionStatsGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		sessionStatsGrid.removeAll();
-		sessionStatsGrid.setLayout(new GridLayout(4, 2, 6, 4));
+		sessionStatsGrid.setLayout(new GridLayout(trackSpent ? 4 : 2, 2, 6, 4));
 
 		JLabel rateCaption = new JLabel("Rate:", SwingConstants.LEFT);
 		rateCaption.setFont(FontManager.getRunescapeSmallFont());
@@ -511,50 +521,71 @@ public class CoinFlowPanel extends PluginPanel
 		sessionTimeLabel.setFont(FontManager.getRunescapeFont());
 		sessionTimeLabel.setHorizontalAlignment(SwingConstants.RIGHT);
 
-		JLabel grossCaption = new JLabel("Gross Loot:", SwingConstants.LEFT);
-		grossCaption.setFont(FontManager.getRunescapeSmallFont());
-		grossCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-		sessionGrossLabel.setFont(FontManager.getRunescapeFont());
-		sessionGrossLabel.setHorizontalAlignment(SwingConstants.RIGHT);
-
-		JLabel suppliesCaption = new JLabel("Spent:", SwingConstants.LEFT);
-		suppliesCaption.setFont(FontManager.getRunescapeSmallFont());
-		suppliesCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
-
-		sessionSuppliesLabel.setFont(FontManager.getRunescapeFont());
-		sessionSuppliesLabel.setHorizontalAlignment(SwingConstants.RIGHT);
-
 		sessionStatsGrid.add(rateCaption);
 		sessionStatsGrid.add(sessionRateLabel);
 		sessionStatsGrid.add(timeCaption);
 		sessionStatsGrid.add(sessionTimeLabel);
-		sessionStatsGrid.add(grossCaption);
-		sessionStatsGrid.add(sessionGrossLabel);
-		sessionStatsGrid.add(suppliesCaption);
-		sessionStatsGrid.add(sessionSuppliesLabel);
+
+		if (trackSpent)
+		{
+			JLabel grossCaption = new JLabel("Gross Loot:", SwingConstants.LEFT);
+			grossCaption.setFont(FontManager.getRunescapeSmallFont());
+			grossCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+			sessionGrossLabel.setFont(FontManager.getRunescapeFont());
+			sessionGrossLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+			JLabel suppliesCaption = new JLabel("Spent:", SwingConstants.LEFT);
+			suppliesCaption.setFont(FontManager.getRunescapeSmallFont());
+			suppliesCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+			sessionSuppliesLabel.setFont(FontManager.getRunescapeFont());
+			sessionSuppliesLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+			sessionStatsGrid.add(grossCaption);
+			sessionStatsGrid.add(sessionGrossLabel);
+			sessionStatsGrid.add(suppliesCaption);
+			sessionStatsGrid.add(sessionSuppliesLabel);
+		}
 
 		c.insets = new Insets(0, 0, 10, 0);
 		card.add(sessionStatsGrid, c);
 		c.gridy++;
 
-		// Reset Session Button (full width)
+		// Finish Session / Reset Button (full width)
 		c.insets = new Insets(0, 0, 0, 0);
-		card.add(standardResetButton, c);
+		card.add(finishSessionButton, c);
 		c.gridy++;
 	}
 
 	private void buildCompactSessionBody(JPanel card, GridBagConstraints c)
 	{
-		JPanel compactGrid = new JPanel(new GridLayout(2, 2, 6, 3));
+		boolean trackSpent = config.trackSpent();
+		JPanel compactGrid = new JPanel(new GridLayout(trackSpent ? 3 : 2, 2, 6, 3));
 		compactGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-		JLabel profitCaption = new JLabel("Profit:", SwingConstants.LEFT);
+		JLabel profitCaption = new JLabel(trackSpent ? "Net Profit:" : "Profit:", SwingConstants.LEFT);
 		profitCaption.setFont(FontManager.getRunescapeSmallFont());
 		profitCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 
 		sessionProfitLabel.setFont(FontManager.getRunescapeFont());
 		sessionProfitLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+		compactGrid.add(profitCaption);
+		compactGrid.add(sessionProfitLabel);
+
+		if (trackSpent)
+		{
+			JLabel suppliesCaption = new JLabel("Spent:", SwingConstants.LEFT);
+			suppliesCaption.setFont(FontManager.getRunescapeSmallFont());
+			suppliesCaption.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+
+			sessionSuppliesLabel.setFont(FontManager.getRunescapeFont());
+			sessionSuppliesLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+			compactGrid.add(suppliesCaption);
+			compactGrid.add(sessionSuppliesLabel);
+		}
 
 		JLabel rateCaption = new JLabel("Rate:", SwingConstants.LEFT);
 		rateCaption.setFont(FontManager.getRunescapeSmallFont());
@@ -563,8 +594,6 @@ public class CoinFlowPanel extends PluginPanel
 		sessionRateLabel.setFont(FontManager.getRunescapeFont());
 		sessionRateLabel.setHorizontalAlignment(SwingConstants.RIGHT);
 
-		compactGrid.add(profitCaption);
-		compactGrid.add(sessionProfitLabel);
 		compactGrid.add(rateCaption);
 		compactGrid.add(sessionRateLabel);
 
@@ -624,7 +653,7 @@ public class CoinFlowPanel extends PluginPanel
 		if (hasActiveGoal)
 		{
 			CoinFlowSession session = plugin.getSession();
-			double progress = session != null ? session.getGoalProgress(goalAmount) : 0.0;
+			double progress = session != null ? session.getGoalProgress(goalAmount, config.trackSpent()) : 0.0;
 			goalCollapsedPreviewLabel.setText(String.format("%.0f%%", progress * 100));
 			goalCollapsedPreviewLabel.setForeground(progress >= 1.0 ? GOAL_COMPLETE_GREEN : GOAL_IN_PROGRESS_ORANGE);
 		}
@@ -823,14 +852,17 @@ public class CoinFlowPanel extends PluginPanel
 		c.gridy = 0;
 
 		CoinFlowSession session = plugin.getSession();
+		boolean trackSpent = config.trackSpent();
 		List<CoinFlowSession.TrackedItem> items = session != null ? session.getSortedItems() : Collections.emptyList();
+		List<CoinFlowSession.TrackedItem> expenses = (session != null && trackSpent) ? session.getSortedExpenses() : Collections.emptyList();
 		lastRenderedItems = session != null ? session.getTrackedItems() : Collections.emptyMap();
-		int itemCount = items.size();
+		lastRenderedExpenses = (session != null && trackSpent) ? session.getTrackedExpenses() : Collections.emptyMap();
+		int totalItemCount = items.size() + expenses.size();
 
 		itemsCollapsedPreviewLabel.setFont(FontManager.getRunescapeSmallFont());
-		if (itemCount > 0)
+		if (totalItemCount > 0)
 		{
-			itemsCollapsedPreviewLabel.setText(itemCount + (itemCount == 1 ? " item" : " items"));
+			itemsCollapsedPreviewLabel.setText(totalItemCount + (totalItemCount == 1 ? " item" : " items"));
 			itemsCollapsedPreviewLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		}
 		else
@@ -859,7 +891,7 @@ public class CoinFlowPanel extends PluginPanel
 			itemsContainer.removeAll();
 			itemsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-			if (itemCount == 0)
+			if (totalItemCount == 0)
 			{
 				itemsContainer.setLayout(new BorderLayout());
 				JLabel emptyLabel = new JLabel("No items tracked this session", SwingConstants.CENTER);
@@ -873,7 +905,11 @@ public class CoinFlowPanel extends PluginPanel
 				itemsContainer.setLayout(new DynamicGridLayout(0, 1, 0, compact ? 2 : 4));
 				for (CoinFlowSession.TrackedItem item : items)
 				{
-					itemsContainer.add(buildItemRow(item, compact));
+					itemsContainer.add(buildItemRow(item, compact, false));
+				}
+				for (CoinFlowSession.TrackedItem expense : expenses)
+				{
+					itemsContainer.add(buildItemRow(expense, compact, true));
 				}
 			}
 
@@ -888,7 +924,7 @@ public class CoinFlowPanel extends PluginPanel
 		repaint();
 	}
 
-	private JPanel buildItemRow(CoinFlowSession.TrackedItem item, boolean compact)
+	private JPanel buildItemRow(CoinFlowSession.TrackedItem item, boolean compact, boolean isExpense)
 	{
 		JPanel row = new JPanel(new BorderLayout(6, 0));
 		row.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -923,32 +959,40 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			JLabel detailLabel = new JLabel(
 				QuantityFormatter.formatNumber(item.getQuantity()) + " x " +
-				QuantityFormatter.formatNumber(item.getPriceEach()) + " gp"
+				QuantityFormatter.formatNumber(item.getPriceEach()) + " gp" +
+				(isExpense ? " (spent)" : "")
 			);
 			detailLabel.setFont(FontManager.getRunescapeSmallFont());
-			detailLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			detailLabel.setForeground(isExpense ? WARN_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
 			textPanel.add(detailLabel);
 		}
 
 		row.add(textPanel, BorderLayout.CENTER);
 
 		// Right: Total value
+		String sign = isExpense ? "-" : "+";
+		Color valueColor = isExpense ? WARN_ORANGE : PROFIT_GREEN;
+		String valueStr = compact
+			? QuantityFormatter.quantityToStackSize(item.getTotalValue()) + " gp"
+			: QuantityFormatter.formatNumber(item.getTotalValue()) + " gp";
+
 		JLabel valueLabel = new JLabel(
-			compact
-				? QuantityFormatter.quantityToStackSize(item.getTotalValue()) + " gp"
-				: QuantityFormatter.formatNumber(item.getTotalValue()) + " gp",
+			sign + valueStr,
 			SwingConstants.RIGHT
 		);
 		valueLabel.setFont(compact ? FontManager.getRunescapeSmallFont() : FontManager.getRunescapeFont());
-		valueLabel.setForeground(PROFIT_GREEN);
+		valueLabel.setForeground(valueColor);
 		row.add(valueLabel, BorderLayout.EAST);
 
 		// Tooltip
+		String tooltipType = isExpense ? "Expense (supply consumed)" : "Loot / Gain";
 		String tooltip = String.format(
-			"<html><b>%s</b><br>Quantity: %s<br>Price each: %s gp<br>Total value: %s gp</html>",
+			"<html><b>%s</b> <i>(%s)</i><br>Quantity: %s<br>Price each: %s gp<br>Total: %s%s gp</html>",
 			item.getName(),
+			tooltipType,
 			QuantityFormatter.formatNumber(item.getQuantity()),
 			QuantityFormatter.formatNumber(item.getPriceEach()),
+			sign,
 			QuantityFormatter.formatNumber(item.getTotalValue())
 		);
 		row.setToolTipText(tooltip);
@@ -1046,12 +1090,33 @@ public class CoinFlowPanel extends PluginPanel
 		return headerRow;
 	}
 
-	private void promptResetSession()
+	void onFinishSessionClicked()
+	{
+		promptResetSession();
+	}
+
+	void promptResetSession()
 	{
 		if (promptOpen)
 		{
 			return;
 		}
+
+		CoinFlowSession session = plugin != null ? plugin.session : null;
+		boolean hasActivity = session != null && (session.getGrossProfit() != 0 || session.getTotalExpenses() != 0
+			|| session.getTotalInGameTime().getSeconds() > 30);
+
+		if (config != null && config.displaySummary() && hasActivity)
+		{
+			openSessionSummary(session);
+			return;
+		}
+
+		if (GraphicsEnvironment.isHeadless())
+		{
+			return;
+		}
+
 		promptOpen = true;
 		try
 		{
@@ -1070,6 +1135,11 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			promptOpen = false;
 		}
+	}
+
+	void openSessionSummary(CoinFlowSession session)
+	{
+		SessionSummaryDialog.showDialog(this, session, config != null && config.trackSpent(), () -> plugin.resetSession());
 	}
 
 	private void buildGoalSetupSubpanel()
@@ -1239,12 +1309,14 @@ public class CoinFlowPanel extends PluginPanel
 		}
 
 		boolean includeAfk = config.includeAfkTime();
+		boolean trackSpent = config.trackSpent();
 
 		// Session card
-		long totalProfit = session.getTotalProfit();
+		long totalProfit = trackSpent ? session.getTotalProfit() : session.getGrossProfit();
+		sessionProfitCaption.setText(trackSpent ? "Net Profit" : "Profit");
 		sessionProfitLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.formatNumber(Math.abs(totalProfit)) + " gp");
 		sessionProfitLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);
-		long rate = session.getGpPerHour(includeAfk);
+		long rate = trackSpent ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
 		sessionRateLabel.setText((rate < 0 ? "-" : "") + QuantityFormatter.formatNumber(Math.abs(rate)) + " gp/hr");
 		sessionRateLabel.setForeground(rate >= 0 ? Color.WHITE : WARN_ORANGE);
 		sessionTimeLabel.setText(formatDuration(session.getTime(includeAfk)));
@@ -1252,10 +1324,14 @@ public class CoinFlowPanel extends PluginPanel
 		sessionCollapsedPreviewLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.quantityToStackSize(Math.abs(totalProfit)) + " gp");
 		sessionCollapsedPreviewLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);
 
-		sessionGrossLabel.setText("+" + QuantityFormatter.formatNumber(session.getGrossProfit()) + " gp");
-		sessionGrossLabel.setForeground(PROFIT_GREEN);
-		sessionSuppliesLabel.setText("-" + QuantityFormatter.formatNumber(session.getTotalExpenses()) + " gp");
-		sessionSuppliesLabel.setForeground(session.getTotalExpenses() > 0 ? WARN_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
+		if (trackSpent)
+		{
+			sessionGrossLabel.setText("+" + QuantityFormatter.formatNumber(session.getGrossProfit()) + " gp");
+			sessionGrossLabel.setForeground(PROFIT_GREEN);
+			long expenses = session.getTotalExpenses();
+			sessionSuppliesLabel.setText((expenses > 0 ? "-" : "") + QuantityFormatter.formatNumber(expenses) + " gp");
+			sessionSuppliesLabel.setForeground(expenses > 0 ? WARN_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
+		}
 
 		// Check if active goal state or collapse/compact state changed in config externally
 		long goalAmount = CoinFlowSession.parseGoalAmount(config.goalAmount());
@@ -1264,18 +1340,29 @@ public class CoinFlowPanel extends PluginPanel
 		boolean sessionCollapsed = config.sessionCardCollapsed();
 		boolean goalCollapsed = config.goalCardCollapsed();
 
-		if (compact != lastCompactMode || sessionCollapsed != lastSessionCollapsed)
+		boolean compactChanged = compact != lastCompactMode;
+		boolean sessionCollapsedChanged = sessionCollapsed != lastSessionCollapsed;
+		boolean trackSpentChanged = trackSpent != lastTrackSpent;
+
+		if (compactChanged || sessionCollapsedChanged || trackSpentChanged)
 		{
 			lastCompactMode = compact;
 			lastSessionCollapsed = sessionCollapsed;
+			lastTrackSpent = trackSpent;
 			refreshHeaderPanel();
 			refreshSessionCardView();
+			if (compactChanged)
+			{
+				refreshGoalCardView();
+			}
 		}
 
 		String currentGoalName = CoinFlowSession.cleanGoalName(config.goalName());
 		if (goalCollapsed != lastGoalCollapsed || hasActiveGoal != lastHadActiveGoal || !currentGoalName.equals(lastGoalName))
 		{
 			lastGoalCollapsed = goalCollapsed;
+			lastHadActiveGoal = hasActiveGoal;
+			lastGoalName = currentGoalName;
 			refreshGoalCardView();
 		}
 
@@ -1301,7 +1388,7 @@ public class CoinFlowPanel extends PluginPanel
 		}
 		else if (showBreakdown)
 		{
-			if (itemsCollapsed != lastItemsCardCollapsed || compact != lastCompactMode)
+			if (itemsCollapsed != lastItemsCardCollapsed || compactChanged || trackSpentChanged)
 			{
 				lastItemsCardCollapsed = itemsCollapsed;
 				refreshItemsCardView();
@@ -1309,9 +1396,12 @@ public class CoinFlowPanel extends PluginPanel
 			else
 			{
 				Map<Integer, CoinFlowSession.TrackedItem> currentItems = session.getTrackedItems();
-				if (lastRenderedItems == null || !currentItems.equals(lastRenderedItems))
+				Map<Integer, CoinFlowSession.TrackedItem> currentExpenses = trackSpent ? session.getTrackedExpenses() : Collections.emptyMap();
+				if (lastRenderedItems == null || lastRenderedExpenses == null
+					|| !currentItems.equals(lastRenderedItems) || !currentExpenses.equals(lastRenderedExpenses))
 				{
 					lastRenderedItems = currentItems;
+					lastRenderedExpenses = currentExpenses;
 					refreshItemsCardView();
 				}
 			}
@@ -1321,7 +1411,8 @@ public class CoinFlowPanel extends PluginPanel
 	private void applySessionToGoal(CoinFlowSession session, long goalAmount)
 	{
 		boolean includeAfk = config.includeAfkTime();
-		double progress = session.getGoalProgress(goalAmount);
+		boolean trackSpent = config.trackSpent();
+		double progress = session.getGoalProgress(goalAmount, trackSpent);
 		int percent = (int) Math.round(progress * 100);
 		goalProgressBar.setValue(percent);
 		goalProgressBar.setString(percent + "%");
@@ -1329,17 +1420,17 @@ public class CoinFlowPanel extends PluginPanel
 		boolean complete = progress >= 1.0;
 		goalProgressBar.setForeground(complete ? GOAL_COMPLETE_GREEN : GOAL_IN_PROGRESS_ORANGE);
 
-		long currentProfit = Math.max(0L, session.getTotalProfit());
+		long currentProfit = Math.max(0L, trackSpent ? session.getTotalProfit() : session.getGrossProfit());
 		goalProgressNumbers.setText(
 			QuantityFormatter.quantityToStackSize(currentProfit) + " / " +
 			QuantityFormatter.quantityToStackSize(goalAmount) + " gp (" +
 			String.format("%.1f%%", progress * 100) + ")"
 		);
 
-		long remaining = session.getGoalRemaining(goalAmount);
+		long remaining = session.getGoalRemaining(goalAmount, trackSpent);
 		goalRemainingValue.setText(QuantityFormatter.formatNumber(remaining) + " gp");
 
-		long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk);
+		long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk, trackSpent);
 		goalEtaValue.setText(CoinFlowSession.formatGoalEta(etaSeconds));
 		goalEtaValue.setForeground(complete ? PROFIT_GREEN : WARN_ORANGE);
 

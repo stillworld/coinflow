@@ -121,6 +121,7 @@ public class CoinFlowPluginEventTest
 		plugin.ignoredItemNames = new HashSet<>();
 
 		// Default config stubs
+		when(config.trackSpent()).thenReturn(true);
 		when(config.idleTimeoutMinutes()).thenReturn(5);
 		when(config.goalAmount()).thenReturn("");
 		when(config.goalName()).thenReturn("");
@@ -128,6 +129,8 @@ public class CoinFlowPluginEventTest
 		when(config.includeAfkTime()).thenReturn(false);
 		when(config.showGoldDrops()).thenReturn(true);
 		when(config.goldDropMinThreshold()).thenReturn(0);
+		when(client.getMouseIdleTicks()).thenReturn(1000);
+		when(client.getKeyboardIdleTicks()).thenReturn(1000);
 
 		// Default coins stubbing
 		int coinsId = net.runelite.api.gameval.ItemID.COINS;
@@ -4999,6 +5002,227 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
+	public void forestryBasket_woodcuttingChoppedLogs_creditsProfitImmediately()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		int basketId = ItemID.FORESTRY_BASKET_OPEN;
+		int logId = ItemID.OAK_LOGS;
+		stubTrackableItem(basketId, "Forestry basket (open)", 0L);
+		stubTrackableItem(logId, "Oak logs", 50L);
+
+		ItemContainer inv = mockContainer(InventoryID.INV, basketId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+
+		ChatMessage event = new ChatMessage(null, net.runelite.api.ChatMessageType.SPAM, "", "You get some oak logs.", "", 0);
+		plugin.onChatMessage(event);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(50L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(1, plugin.getSession().getTrackedItems().get(logId).getQuantity());
+	}
+
+	@Test
+	public void forestryBasket_equippedInCapeSlot_creditsProfitImmediately()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		int basketId = ItemID.FORESTRY_BASKET_OPEN;
+		int magicLogId = ItemID.MAGIC_LOGS;
+		stubTrackableItem(basketId, "Forestry basket (open)", 0L);
+		stubTrackableItem(magicLogId, "Magic logs", 1_100L);
+
+		// Basket is worn in equipment cape slot
+		ItemContainer worn = mockContainer(InventoryID.WORN, basketId, 1);
+		ItemContainer inv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(worn);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, worn));
+
+		ChatMessage event = new ChatMessage(null, net.runelite.api.ChatMessageType.SPAM, "", "You get a magic log.", "", 0);
+		plugin.onChatMessage(event);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(1_100L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+	}
+
+	@Test
+	public void logBasket_woodcuttingDoubleProc_creditsBothLogs()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		int basketId = ItemID.LOG_BASKET_OPEN;
+		int yewId = ItemID.YEW_LOGS;
+		stubTrackableItem(basketId, "Log basket (open)", 0L);
+		stubTrackableItem(yewId, "Yew logs", 250L);
+
+		ItemContainer inv = mockContainer(InventoryID.INV, basketId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+
+		// Double proc from woodcutting perk / cape
+		ChatMessage doubleLog = new ChatMessage(null, net.runelite.api.ChatMessageType.SPAM, "", "You get 2 yew logs.", "", 0);
+		plugin.onChatMessage(doubleLog);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(500L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(2, plugin.getSession().getTrackedItems().get(yewId).getQuantity());
+	}
+
+	@Test
+	public void forestryBasket_basketFullOverflowToInventory_creditsOnceWithoutDuplicate()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		int basketId = ItemID.FORESTRY_BASKET_OPEN;
+		int yewId = ItemID.YEW_LOGS;
+		stubTrackableItem(basketId, "Forestry basket (open)", 0L);
+		stubTrackableItem(yewId, "Yew logs", 250L);
+
+		// Baseline: basket only
+		ItemContainer inv1 = mockContainer(InventoryID.INV, basketId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Chat message says player got a yew log
+		ChatMessage msg = new ChatMessage(null, net.runelite.api.ChatMessageType.SPAM, "", "You get some yew logs.", "", 0);
+		plugin.onChatMessage(msg);
+
+		// Basket was full, so the yew log spilled over into inventory
+		ItemContainer inv2 = mockContainer(InventoryID.INV, basketId, 1, yewId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		plugin.onGameTick(new GameTick());
+
+		// Profit must be exactly 250 gp (credited once, not duplicated between basket and inventory)
+		Assert.assertEquals(250L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(1, plugin.getSession().getTrackedItems().get(yewId).getQuantity());
+	}
+
+	@Test
+	public void forestryBasket_groundPickup_creditsProfit()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(50);
+
+		net.runelite.api.WorldView worldView = mock(net.runelite.api.WorldView.class);
+		when(worldView.getBaseX()).thenReturn(1000);
+		when(worldView.getBaseY()).thenReturn(2000);
+		when(worldView.getPlane()).thenReturn(0);
+		when(client.getTopLevelWorldView()).thenReturn(worldView);
+
+		Player player = mock(Player.class);
+		WorldPoint playerLocation = new WorldPoint(1010, 2020, 0);
+		when(player.getWorldLocation()).thenReturn(playerLocation);
+		when(client.getLocalPlayer()).thenReturn(player);
+
+		int basketId = ItemID.FORESTRY_BASKET_OPEN;
+		int teakId = ItemID.TEAK_LOGS;
+		stubTrackableItem(basketId, "Forestry basket (open)", 0L);
+		stubTrackableItem(teakId, "Teak logs", 120L);
+
+		ItemContainer inv = mockContainer(InventoryID.INV, basketId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+
+		// Ground pickup into open forestry basket
+		net.runelite.api.MenuEntry takeEntry = mock(net.runelite.api.MenuEntry.class);
+		when(takeEntry.getOption()).thenReturn("Take");
+		when(takeEntry.getIdentifier()).thenReturn(teakId);
+		when(takeEntry.getParam0()).thenReturn(10);
+		when(takeEntry.getParam1()).thenReturn(20);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(takeEntry));
+
+		TileItem tileItem = mock(TileItem.class);
+		when(tileItem.getId()).thenReturn(teakId);
+		when(tileItem.getQuantity()).thenReturn(1);
+
+		Tile tile = mock(Tile.class);
+		when(tile.getWorldLocation()).thenReturn(playerLocation);
+
+		plugin.onItemDespawned(new ItemDespawned(tile, tileItem));
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(120L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void forestryBasket_togglingOpenClosed_zeroProfitOrLoss()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		int closedBasket = ItemID.FORESTRY_BASKET_CLOSED;
+		int openBasket = ItemID.FORESTRY_BASKET_OPEN;
+		int closedLogBasket = ItemID.LOG_BASKET_CLOSED;
+		int openLogBasket = ItemID.LOG_BASKET_OPEN;
+
+		stubTrackableItem(closedBasket, "Forestry basket", 0L);
+		stubTrackableItem(openBasket, "Open forestry basket", 0L);
+		stubTrackableItem(closedLogBasket, "Log basket", 0L);
+		stubTrackableItem(openLogBasket, "Open log basket", 0L);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, closedBasket, 1, closedLogBasket, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		ItemContainer inv2 = mockContainer(InventoryID.INV, openBasket, 1, openLogBasket, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+
+		// Clicking "Empty basket" on open forestry basket triggers rebaseline
+		net.runelite.api.MenuEntry emptyEntry = mock(net.runelite.api.MenuEntry.class);
+		when(emptyEntry.getOption()).thenReturn("Empty basket");
+		when(emptyEntry.getTarget()).thenReturn("<col=ff9040>Open forestry basket</col>");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(emptyEntry));
+		Assert.assertTrue(plugin.isNeedsRebaseline());
+	}
+
+	@Test
+	public void forestryBasket_suppressesWhenForestryKitOpen()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		Assert.assertFalse(plugin.interfaceTracker.isTrackingSuppressed());
+
+		WidgetLoaded widgetLoaded = new WidgetLoaded();
+		widgetLoaded.setGroupId(InterfaceID.FORESTRY_KIT_MAIN);
+		plugin.onWidgetLoaded(widgetLoaded);
+
+		Assert.assertTrue(plugin.interfaceTracker.isTrackingSuppressed());
+	}
+
+	@Test
+	public void woodcutting_allLogTypesAndBark_parsedAccurately()
+	{
+		Assert.assertEquals(ItemID.LOGS, CoinFlowPlugin.findLogIdInMessage("You get some logs."));
+		Assert.assertEquals(ItemID.LOGS, CoinFlowPlugin.findLogIdInMessage("You get a log."));
+		Assert.assertEquals(ItemID.OAK_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some oak logs."));
+		Assert.assertEquals(ItemID.OAK_LOGS, CoinFlowPlugin.findLogIdInMessage("You get an oak log."));
+		Assert.assertEquals(ItemID.WILLOW_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some willow logs."));
+		Assert.assertEquals(ItemID.TEAK_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some teak logs."));
+		Assert.assertEquals(ItemID.JUNIPER_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some juniper logs."));
+		Assert.assertEquals(ItemID.MAPLE_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some maple logs."));
+		Assert.assertEquals(ItemID.MAHOGANY_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some mahogany logs."));
+		Assert.assertEquals(ItemID.YEW_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some yew logs."));
+		Assert.assertEquals(ItemID.MAGIC_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some magic logs."));
+		Assert.assertEquals(ItemID.REDWOOD_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some redwood logs."));
+		Assert.assertEquals(ItemID.ARCTIC_PINE_LOG, CoinFlowPlugin.findLogIdInMessage("You get some arctic pine logs."));
+		Assert.assertEquals(ItemID.BLISTERWOOD_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some blisterwood logs."));
+		Assert.assertEquals(ItemID.ACHEY_TREE_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some achey tree logs."));
+		Assert.assertEquals(ItemID.HOLLOW_BARK, CoinFlowPlugin.findLogIdInMessage("You get some bark."));
+		Assert.assertEquals(ItemID.CAMPHOR_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some camphor logs."));
+		Assert.assertEquals(ItemID.IRONWOOD_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some ironwood logs."));
+		Assert.assertEquals(ItemID.ROSEWOOD_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some rosewood logs."));
+		Assert.assertEquals(ItemID.JATOBA_LOGS, CoinFlowPlugin.findLogIdInMessage("You get some jatoba logs."));
+
+		Assert.assertEquals(1, CoinFlowPlugin.parseLogQtyInMessage("You get some oak logs."));
+		Assert.assertEquals(2, CoinFlowPlugin.parseLogQtyInMessage("You get 2 oak logs."));
+		Assert.assertEquals(3, CoinFlowPlugin.parseLogQtyInMessage("You cut 3 willow logs."));
+	}
+
+	@Test
 	public void toolLeprechaun_notingFreshlyHarvestedHerbs_preservesProfitWithoutChurn()
 	{
 		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
@@ -5508,6 +5732,158 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(seedPrice, plugin.session.getTotalExpenses());
 		Assert.assertEquals(9 * cleanPrice, plugin.session.getGrossProfit());
 		Assert.assertEquals((9 * cleanPrice) - seedPrice, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void onGameTick_playerWalking_clearsAndPreventsIdleState()
+	{
+		plugin.snapshotInitialized = true;
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+
+		// Initially at (100, 200, 0)
+		when(player.getWorldLocation()).thenReturn(new WorldPoint(100, 200, 0));
+		when(player.getPoseAnimation()).thenReturn(808); // idle pose
+		when(player.getIdlePoseAnimation()).thenReturn(808);
+		when(player.getAnimation()).thenReturn(-1);
+		when(client.getTickCount()).thenReturn(1);
+
+		// Make session idle
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		// Tick 1: Player hasn't moved yet, initial location registered
+		plugin.onGameTick(new GameTick());
+		Assert.assertTrue("Player standing still without input should remain idle", plugin.session.isIdle());
+
+		// Tick 2: Player moves to (101, 200, 0)
+		when(client.getTickCount()).thenReturn(2);
+		when(player.getWorldLocation()).thenReturn(new WorldPoint(101, 200, 0));
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertFalse("Player moving should clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onGameTick_playerStandingStill_followingOrAfkTarget_goesIdle()
+	{
+		plugin.snapshotInitialized = true;
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+
+		// Standing still at same location
+		when(player.getWorldLocation()).thenReturn(new WorldPoint(100, 200, 0));
+		when(player.getPoseAnimation()).thenReturn(808);
+		when(player.getIdlePoseAnimation()).thenReturn(808);
+		when(player.getAnimation()).thenReturn(-1);
+		when(client.getTickCount()).thenReturn(1);
+
+		plugin.onGameTick(new GameTick());
+
+		// Tick 2: Still standing at same location
+		when(client.getTickCount()).thenReturn(2);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertTrue("Standing still with no input should go idle", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onItemContainerChanged_clearsIdleState_evenWithoutProfit()
+	{
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		// Item container change with no recognized loot/expense
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, 999999, 1)
+		));
+
+		Assert.assertFalse("Inventory container change should immediately clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onMenuOptionClicked_clearsIdleState()
+	{
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		net.runelite.api.MenuEntry walkEntry = mock(net.runelite.api.MenuEntry.class);
+		when(walkEntry.getOption()).thenReturn("Walk here");
+		when(walkEntry.getTarget()).thenReturn("");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(walkEntry));
+
+		Assert.assertFalse("Menu option click should immediately clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void trackSpent_whenDisabled_ignoresSupplyExpensesForGrossOnlyTracking()
+	{
+		when(config.trackSpent()).thenReturn(false);
+
+		int prayerPot4 = net.runelite.api.gameval.ItemID._4DOSEPRAYERRESTORE;
+		int prayerPot3 = net.runelite.api.gameval.ItemID._3DOSEPRAYERRESTORE;
+		int sharkId = net.runelite.api.gameval.ItemID.SHARK;
+
+		stubTrackableItem(prayerPot4, "Prayer potion(4)", 10_000L);
+		stubTrackableItem(prayerPot3, "Prayer potion(3)", 7_500L);
+		stubTrackableItem(sharkId, "Shark", 1_000L);
+
+		// 1. Initial snapshot with 1x Prayer pot(4)
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, prayerPot4, 1)
+		));
+		plugin.onGameTick(new GameTick());
+
+		// 2. Sip potion -> 1x pot(3)
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, prayerPot3, 1)
+		));
+		plugin.onGameTick(new GameTick());
+
+		// With trackSpent = false, no supply expenses should be recorded
+		Assert.assertEquals("Expenses should be 0 with trackSpent disabled", 0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals("Net profit should be 0", 0L, plugin.getSession().getTotalProfit());
+
+		// 3. Loot 2x Shark (+2,000 gp gross)
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, prayerPot3, 1, sharkId, 2)
+		));
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals("Gross profit should be 2,000 gp", 2_000L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals("Expenses should remain 0", 0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals("Net profit equals gross profit in gross tracking mode", 2_000L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void checkGoalNotification_whenTrackSpentDisabled_evaluatesAgainstGrossProfit()
+	{
+		when(config.trackSpent()).thenReturn(false);
+		when(config.goalAmount()).thenReturn("10k");
+		when(config.goalName()).thenReturn("Gross Goal");
+		when(config.notifyOnGoal()).thenReturn(true);
+
+		// Session with 12k gross profit, 5k expenses (net 7k, gross 12k)
+		plugin.session = CoinFlowSession.createNew().withGainsAndExpenses(
+			Collections.singletonMap(1, new CoinFlowSession.TrackedItem(1, "Onyx", 1, 12_000L)),
+			Collections.singletonMap(2, new CoinFlowSession.TrackedItem(2, "Prayer potion", 1, 5_000L))
+		);
+
+		plugin.checkGoalNotification();
+
+		// Should notify because gross profit 12k >= goal 10k, even though net is only 7k
+		Assert.assertTrue("Goal completed notified flag should be set", plugin.goalCompletedNotified);
+		org.mockito.Mockito.verify(notifier).notify(org.mockito.ArgumentMatchers.contains("Gross Goal"));
 	}
 }
 

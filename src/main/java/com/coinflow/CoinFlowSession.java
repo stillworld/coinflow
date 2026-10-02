@@ -173,6 +173,51 @@ public final class CoinFlowSession
 	}
 
 	/**
+	 * Returns a new session snapshot with lastActivityTime updated to now and idle cleared.
+	 *
+	 * @return new session snapshot with active state refreshed
+	 */
+	public CoinFlowSession withActivity()
+	{
+		Instant now = Instant.now();
+		return new CoinFlowSession(
+			this.trackedItems,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			now,
+			this.lastTickTime,
+			false
+		);
+	}
+
+	/**
+	 * Returns a new session snapshot with the specified active and in-game durations.
+	 *
+	 * @param activeTime active elapsed duration
+	 * @param totalInGameTime total in-game elapsed duration
+	 * @return new session snapshot with updated durations
+	 */
+	public CoinFlowSession withDurations(Duration activeTime, Duration totalInGameTime)
+	{
+		return new CoinFlowSession(
+			this.trackedItems,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			activeTime,
+			totalInGameTime,
+			this.lastActivityTime,
+			this.lastTickTime,
+			this.idle
+		);
+	}
+
+	/**
 	 * Returns a new session with the given items added to the tracked totals.
 	 * Resets idle state and sets lastActivityTime to now without adding idle time gaps.
 	 *
@@ -314,12 +359,15 @@ public final class CoinFlowSession
 	 * Called on each game tick to keep the timer and GP/hr accurate in real time.
 	 *
 	 * @param idleTimeoutMinutes minutes of inactivity before marking as idle
+	 * @param playerActive whether the player exhibited in-game activity (movement, skilling, input) this tick
+	 * @return new session snapshot with updated timings
 	 */
-	public CoinFlowSession tick(int idleTimeoutMinutes)
+	public CoinFlowSession tick(int idleTimeoutMinutes, boolean playerActive)
 	{
 		Instant now = Instant.now();
-		Duration sinceLastActivity = Duration.between(lastActivityTime, now);
-		boolean nowIdle = sinceLastActivity.toMinutes() >= idleTimeoutMinutes;
+		Instant updatedActivityTime = playerActive ? now : this.lastActivityTime;
+		Duration sinceLastActivity = Duration.between(updatedActivityTime, now);
+		boolean nowIdle = !playerActive && sinceLastActivity.toMinutes() >= idleTimeoutMinutes;
 
 		// Accumulate time since last tick.
 		// Clamp to max 1500ms to ignore long gaps (e.g. world hops, lag spikes, or login delays).
@@ -340,10 +388,21 @@ public final class CoinFlowSession
 			this.sessionStartTime,
 			newActiveTime,
 			newTotalInGameTime,
-			this.lastActivityTime,
+			updatedActivityTime,
 			now,
 			nowIdle
 		);
+	}
+
+	/**
+	 * Returns a new session snapshot with updated active time and in-game time tracking.
+	 *
+	 * @param idleTimeoutMinutes minutes of inactivity before marking as idle
+	 * @return new session snapshot with updated timings
+	 */
+	public CoinFlowSession tick(int idleTimeoutMinutes)
+	{
+		return tick(idleTimeoutMinutes, false);
 	}
 
 	// ── Getters ──────────────────────────────────────────────────────────
@@ -444,6 +503,34 @@ public final class CoinFlowSession
 	public long getGpPerHour()
 	{
 		return getGpPerHour(false);
+	}
+
+	/**
+	 * Calculates gross GP per hour based on active time or total in-game time (excluding supply expenses).
+	 *
+	 * @param includeAfkTime whether to include AFK/idle time in the calculation
+	 * @return Gross GP/hr, or 0 if time is too short
+	 */
+	public long getGrossGpPerHour(boolean includeAfkTime)
+	{
+		Duration time = includeAfkTime ? totalInGameTime : activeTime;
+		long seconds = time.getSeconds();
+		if (seconds < 1)
+		{
+			return 0;
+		}
+
+		return (grossProfit * 3600L) / seconds;
+	}
+
+	/**
+	 * Calculates gross GP per hour based on active time (excluding AFK gaps and supply expenses).
+	 *
+	 * @return Gross GP/hr, or 0 if active time is too short
+	 */
+	public long getGrossGpPerHour()
+	{
+		return getGrossGpPerHour(false);
 	}
 
 	// ── Goal Calculations ────────────────────────────────────────────────
@@ -563,11 +650,24 @@ public final class CoinFlowSession
 	 */
 	public long getGoalRemaining(long goalAmount)
 	{
+		return getGoalRemaining(goalAmount, true);
+	}
+
+	/**
+	 * Returns the remaining GP to reach the target goal based on net or gross tracking.
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param trackSpent whether to evaluate against net profit (true) or gross profit (false)
+	 * @return remaining GP to target, or 0 if reached
+	 */
+	public long getGoalRemaining(long goalAmount, boolean trackSpent)
+	{
 		if (goalAmount <= 0)
 		{
 			return 0L;
 		}
-		return Math.max(0L, goalAmount - Math.max(0L, totalProfit));
+		long current = Math.max(0L, trackSpent ? totalProfit : grossProfit);
+		return Math.max(0L, goalAmount - current);
 	}
 
 	/**
@@ -575,11 +675,23 @@ public final class CoinFlowSession
 	 */
 	public double getGoalProgress(long goalAmount)
 	{
+		return getGoalProgress(goalAmount, true);
+	}
+
+	/**
+	 * Returns the goal completion progress as a ratio between 0.0 and 1.0 based on net or gross tracking.
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param trackSpent whether to evaluate against net profit (true) or gross profit (false)
+	 * @return progress ratio between 0.0 and 1.0
+	 */
+	public double getGoalProgress(long goalAmount, boolean trackSpent)
+	{
 		if (goalAmount <= 0)
 		{
 			return 0.0;
 		}
-		long current = Math.max(0L, totalProfit);
+		long current = Math.max(0L, trackSpent ? totalProfit : grossProfit);
 		return Math.min(1.0, (double) current / goalAmount);
 	}
 
@@ -594,12 +706,26 @@ public final class CoinFlowSession
 	 */
 	public long getGoalEtaSeconds(long goalAmount, boolean includeAfkTime)
 	{
+		return getGoalEtaSeconds(goalAmount, includeAfkTime, true);
+	}
+
+	/**
+	 * Returns the estimated seconds remaining until the goal is reached,
+	 * or -1 if the ETA cannot be calculated (e.g. paused, zero GP/hr, or warming up).
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param includeAfkTime whether to compute using AFK time
+	 * @param trackSpent whether to evaluate against net profit and net GP/hr or gross tracking
+	 * @return estimated seconds remaining, 0 if achieved, or -1 if calculating/paused
+	 */
+	public long getGoalEtaSeconds(long goalAmount, boolean includeAfkTime, boolean trackSpent)
+	{
 		if (goalAmount <= 0)
 		{
 			return -1;
 		}
 
-		long remaining = getGoalRemaining(goalAmount);
+		long remaining = getGoalRemaining(goalAmount, trackSpent);
 		if (remaining <= 0)
 		{
 			return 0; // Goal reached
@@ -612,7 +738,7 @@ public final class CoinFlowSession
 			return -1; // Warmup
 		}
 
-		long gpHr = getGpPerHour(includeAfkTime);
+		long gpHr = trackSpent ? getGpPerHour(includeAfkTime) : getGrossGpPerHour(includeAfkTime);
 		if (gpHr <= 0)
 		{
 			return -1; // Paused or no positive rate
