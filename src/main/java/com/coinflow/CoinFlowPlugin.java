@@ -73,7 +73,7 @@ import net.runelite.client.util.Text;
 @Slf4j
 @PluginDescriptor(
 	name = "Coin Flow",
-	description = "Live GP/hr and income tracker for OSRS — real-time earnings rate, session profit, and item breakdown",
+	description = "Real-time GP/hr and income tracker",
 	tags = {"coin", "flow", "gp", "gold", "money", "profit", "rate", "income", "tracker"},
 	internalName = "coinflow"
 )
