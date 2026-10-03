@@ -15,7 +15,8 @@
 - `InventorySnapshot.java`: Immutable value object capturing inventory/equipment items, quantities, and GE/HA valuations.
 - `InventorySnapshotService.java`: Compares tick-over-tick snapshots and emits net item diffs for reconciliation.
 - `InterfaceTracker.java`: Tracks open widget interfaces (Bank, GE, Trade, Shops, Death Storage) to prevent false profit/loss.
-- `ConsumableRegistry.java`: Catalog of potions, foods, teleports, and degradation states with item IDs & dose rules.
+- `ConsumableRegistry.java`: Catalog of potions, foods, teleports, and degradation states with item IDs & dose rules. `isConsumable(id, name, itemManager)` classifies food/drink via `ItemComposition.getInventoryActions()` (`Eat`/`Drink`), falling back to name rules for potions, runes, ammo, and teleports.
+- `WeaponChargeTracker.java`: Tracks supplies consumed inside charged weapons (tridents, blowpipe, bowfa, etc.). Attack graphics/animations are the primary signal; `CHARGES_*_QUANTITY` varbit deltas are also polled each tick, converted to resource spend (blowpipe scales/darts, trident runes, crystal shards), and deduplicated against attack-triggered charges so a charge is never counted twice. Emitted as supply expenses on the game tick.
 - `CoinFlowInputFilter.java`: Filters chatbox/menu inputs and validates triggers.
 
 ### Reconciliation Engine (`src/main/java/com/coinflow/reconciliation/`)

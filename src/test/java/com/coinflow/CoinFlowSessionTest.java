@@ -250,6 +250,48 @@ public class CoinFlowSessionTest
 	}
 
 	@Test
+	public void tick_transitionToIdle_rollsBackInactivityWindow()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withDurations(Duration.ofSeconds(60), Duration.ofSeconds(60));
+
+		// Tick with idleTimeout = 0 to trigger transition to idle
+		CoinFlowSession idleSession = session.tick(0);
+		Assert.assertTrue(idleSession.isIdle());
+		// Active time should not leak time beyond pre-idle active duration
+		Assert.assertTrue("Active time should not exceed initial active time",
+			idleSession.getActiveTime().compareTo(Duration.ofSeconds(60)) <= 0);
+	}
+
+	@Test
+	public void tick_transitionToIdle_doesNotWipeActiveTimeOnLongInactivityGap()
+	{
+		// Simulate player playing for 10 minutes (600 seconds)
+		// and inactive for 30 minutes in the past
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withDurations(Duration.ofMinutes(10), Duration.ofMinutes(10))
+			.withLastActivityTime(java.time.Instant.now().minus(Duration.ofMinutes(30)));
+
+		// Tick with idleTimeout = 2 minutes: even though lastActivityTime was 30 minutes ago,
+		// the rollback is bounded to at most idleTimeoutMinutes (2 min), preserving at least 8 minutes.
+		CoinFlowSession idleSession = session.tick(2);
+		Assert.assertTrue(idleSession.isIdle());
+		Assert.assertTrue("Active time must retain at least (10m - 2m) = 8m of played time",
+			idleSession.getActiveTime().compareTo(Duration.ofMinutes(8)) >= 0);
+	}
+
+	@Test
+	public void withResumedState_preservesSessionDurationsAndResetsActivity()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withDurations(Duration.ofMinutes(15), Duration.ofMinutes(15));
+
+		CoinFlowSession resumed = session.withResumedState();
+		Assert.assertEquals(Duration.ofMinutes(15), resumed.getActiveTime());
+		Assert.assertEquals(Duration.ofMinutes(15), resumed.getTotalInGameTime());
+	}
+
+	@Test
 	public void withGains_resetsIdleState()
 	{
 		CoinFlowSession session = CoinFlowSession.createNew();
@@ -258,6 +300,34 @@ public class CoinFlowSessionTest
 
 		session = session.withGains(gains(1, "Item", 1, 100L));
 		Assert.assertFalse("withGains should reset idle state", session.isIdle());
+	}
+
+	@Test
+	public void withGains_preservesLastTickTime()
+	{
+		// Regression test: gains/expenses are processed on non-tick events that fire
+		// milliseconds before GameTick. If withGains overwrote lastTickTime, the next
+		// tick() would measure a ~0ms delta and the entire ~600ms interval would be
+		// lost from the session clock (inflating GP/hr).
+		CoinFlowSession session = CoinFlowSession.createNew();
+		session = session.tick(999); // establishes a lastTickTime
+
+		CoinFlowSession withGains = session.withGains(gains(1, "Item", 1, 100L));
+		Assert.assertEquals("withGains must not advance lastTickTime",
+			session.getLastTickTime(), withGains.getLastTickTime());
+	}
+
+	@Test
+	public void withGainsLossesAndExpenses_preservesLastTickTime()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew();
+		session = session.tick(999);
+
+		CoinFlowSession updated = session.withGainsLossesAndExpenses(
+			gains(1, "Item", 1, 100L), java.util.Collections.emptyMap(),
+			java.util.Collections.emptyMap());
+		Assert.assertEquals("withGainsLossesAndExpenses must not advance lastTickTime",
+			session.getLastTickTime(), updated.getLastTickTime());
 	}
 
 	@Test

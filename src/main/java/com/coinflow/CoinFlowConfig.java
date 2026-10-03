@@ -268,7 +268,7 @@ public interface CoinFlowConfig extends Config
 	@Range(min = 1, max = 60)
 	default int idleTimeoutMinutes()
 	{
-		return 5;
+		return 2;
 	}
 
 	@ConfigItem(
@@ -281,5 +281,17 @@ public interface CoinFlowConfig extends Config
 	default String ignoredItems()
 	{
 		return "";
+	}
+
+	@ConfigItem(
+		keyName = "trackWeaponCharges",
+		name = "Track Weapon Charges",
+		description = "Deduct runes, scales, and other resources consumed inside charged weapons (blowpipe, tridents, etc.) from profit",
+		section = advancedSection,
+		position = 3
+	)
+	default boolean trackWeaponCharges()
+	{
+		return true;
 	}
 }

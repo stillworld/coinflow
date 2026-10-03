@@ -135,86 +135,118 @@ public class PotionDoseHandler implements ReconciliationHandler
 				continue;
 			}
 
-			// If lost doses >= gained doses, this is a decant and/or consumption of this potion
+			int dosesConsumed = Math.max(0, totalLostDoses - totalGainedDoses);
+			int vialsFreed = totalLostBottles - totalGainedBottles;
+
+			// Remove all lost potion items: they transformed into other dose forms
+			// (or were consumed as doses), so they are never a raw supply loss.
+			for (PotionEntry p : lostList)
+			{
+				rawLosses.remove(p.itemId);
+			}
+
 			if (totalLostDoses >= totalGainedDoses)
 			{
-				int dosesConsumed = totalLostDoses - totalGainedDoses;
-				int vialsFreed = totalLostBottles - totalGainedBottles;
-
-				// Remove all lost potion items
-				for (PotionEntry p : lostList)
-				{
-					rawLosses.remove(p.itemId);
-				}
-
-				// Remove all gained potion items of this base name
+				// Decant and/or consumption of this potion: suppress all gains of this base
 				for (PotionEntry p : gainedList)
 				{
 					rawGains.remove(p.itemId);
 				}
-
-				// If doses were consumed, record supply expense
-				if (dosesConsumed > 0 && sampleCanonicalId != -1 && sampleDose > 0)
+			}
+			else
+			{
+				// More doses gained than lost (e.g. drank a dose while looting or
+				// decanting the same potion in the same tick): suppress only the
+				// dose-equivalent of the lost potions, highest dose first.
+				// Leftover gained doses remain as legitimate profit.
+				int dosesToSuppress = totalLostDoses;
+				List<PotionEntry> descendingDose = new ArrayList<>(gainedList);
+				descendingDose.sort((a, b) -> Integer.compare(b.dose, a.dose));
+				for (PotionEntry p : descendingDose)
 				{
-					long potionPrice = itemManager.getItemPrice(sampleCanonicalId);
-					long dosePrice = Math.max(1L, potionPrice / sampleDose);
-					String expenseName = (sampleBaseName != null ? sampleBaseName : "Potion") + " (dose)";
-					context.addSupplyExpense(sampleCanonicalId,
-						new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed, dosePrice));
-				}
-
-				// Reconcile empty vials if vials were freed
-				if (vialsFreed > 0)
-				{
-					Integer vialGainId = null;
-					for (int gainedId : rawGains.keySet())
+					if (dosesToSuppress <= 0)
 					{
-						int canonicalGainedId = itemManager.canonicalize(gainedId);
-						if (canonicalGainedId == ItemID.VIAL_EMPTY || "Vial".equalsIgnoreCase(context.getItemName(canonicalGainedId)))
-						{
-							vialGainId = gainedId;
-							break;
-						}
+						break;
 					}
-
-					if (vialGainId != null)
+					int suppressQty = Math.min(p.qty, dosesToSuppress / p.dose);
+					if (suppressQty <= 0)
 					{
-						int vialQty = rawGains.get(vialGainId);
-						if (vialQty <= vialsFreed)
-						{
-							rawGains.remove(vialGainId);
-						}
-						else
-						{
-							rawGains.put(vialGainId, vialQty - vialsFreed);
-						}
+						continue;
+					}
+					dosesToSuppress -= suppressQty * p.dose;
+					int remaining = rawGains.getOrDefault(p.itemId, 0) - suppressQty;
+					if (remaining <= 0)
+					{
+						rawGains.remove(p.itemId);
+					}
+					else
+					{
+						rawGains.put(p.itemId, remaining);
 					}
 				}
-				// If bottles were consolidated from empty vials:
-				else if (vialsFreed < 0)
+			}
+
+			// If doses were consumed, record supply expense
+			if (dosesConsumed > 0 && sampleCanonicalId != -1 && sampleDose > 0)
+			{
+				long potionPrice = itemManager.getItemPrice(sampleCanonicalId);
+				long dosePrice = Math.max(1L, potionPrice / sampleDose);
+				String expenseName = (sampleBaseName != null ? sampleBaseName : "Potion") + " (dose)";
+				context.addSupplyExpense(sampleCanonicalId,
+					new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed, dosePrice));
+			}
+
+			// Reconcile empty vials if vials were freed
+			if (vialsFreed > 0)
+			{
+				Integer vialGainId = null;
+				for (int gainedId : rawGains.keySet())
 				{
-					int vialsNeeded = -vialsFreed;
-					Integer vialLostId = null;
-					for (int lostId : rawLosses.keySet())
+					int canonicalGainedId = itemManager.canonicalize(gainedId);
+					if (canonicalGainedId == ItemID.VIAL_EMPTY || "Vial".equalsIgnoreCase(context.getItemName(canonicalGainedId)))
 					{
-						int canonicalLostId = itemManager.canonicalize(lostId);
-						if (canonicalLostId == ItemID.VIAL_EMPTY || "Vial".equalsIgnoreCase(context.getItemName(canonicalLostId)))
-						{
-							vialLostId = lostId;
-							break;
-						}
+						vialGainId = gainedId;
+						break;
 					}
-					if (vialLostId != null)
+				}
+
+				if (vialGainId != null)
+				{
+					int vialQty = rawGains.get(vialGainId);
+					if (vialQty <= vialsFreed)
 					{
-						int vialQty = rawLosses.get(vialLostId);
-						if (vialQty <= vialsNeeded)
-						{
-							rawLosses.remove(vialLostId);
-						}
-						else
-						{
-							rawLosses.put(vialLostId, vialQty - vialsNeeded);
-						}
+						rawGains.remove(vialGainId);
+					}
+					else
+					{
+						rawGains.put(vialGainId, vialQty - vialsFreed);
+					}
+				}
+			}
+			// If bottles were consolidated from empty vials:
+			else if (vialsFreed < 0)
+			{
+				int vialsNeeded = -vialsFreed;
+				Integer vialLostId = null;
+				for (int lostId : rawLosses.keySet())
+				{
+					int canonicalLostId = itemManager.canonicalize(lostId);
+					if (canonicalLostId == ItemID.VIAL_EMPTY || "Vial".equalsIgnoreCase(context.getItemName(canonicalLostId)))
+					{
+						vialLostId = lostId;
+						break;
+					}
+				}
+				if (vialLostId != null)
+				{
+					int vialQty = rawLosses.get(vialLostId);
+					if (vialQty <= vialsNeeded)
+					{
+						rawLosses.remove(vialLostId);
+					}
+					else
+					{
+						rawLosses.put(vialLostId, vialQty - vialsNeeded);
 					}
 				}
 			}

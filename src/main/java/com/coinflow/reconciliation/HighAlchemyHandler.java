@@ -42,10 +42,16 @@ public class HighAlchemyHandler implements ReconciliationHandler
 		long alchedItemMarketPrice = 0L;
 		String alchedItemName = null;
 
-		for (Map.Entry<Integer, Integer> loss : rawLosses.entrySet())
+		// Deterministic candidate scan: sorted ids, prefer the smallest alch qty
+		// (a real cast alchemises one item per tick; a partial-stack match also
+		// covers an alched item that was lost for another reason in the same tick).
+		java.util.List<Integer> sortedLossIds = new java.util.ArrayList<>(rawLosses.keySet());
+		java.util.Collections.sort(sortedLossIds);
+		int bestAlchQty = Integer.MAX_VALUE;
+
+		for (int rawLostId : sortedLossIds)
 		{
-			int rawLostId = loss.getKey();
-			int lostQty = loss.getValue();
+			int lostQty = rawLosses.get(rawLostId);
 			int canonicalLostId = itemManager.canonicalize(rawLostId);
 
 			if (canonicalLostId == ItemID.FIRERUNE || canonicalLostId == ItemID.COINS)
@@ -54,37 +60,56 @@ public class HighAlchemyHandler implements ReconciliationHandler
 			}
 
 			ItemComposition comp = itemManager.getItemComposition(canonicalLostId);
-			if (comp != null)
+			if (comp == null)
 			{
-				int haPrice = comp.getHaPrice();
-				if (haPrice > 0)
-				{
-					int candidateAlchQty = lostQty;
-					if (canonicalLostId == ItemID.NATURERUNE)
-					{
-						if (lostQty >= 2 && (long) haPrice * (lostQty - 1) == coinsGained)
-						{
-							candidateAlchQty = lostQty - 1;
-						}
-						else if ((long) haPrice * lostQty != coinsGained)
-						{
-							continue;
-						}
-					}
+				continue;
+			}
 
-					if ((long) haPrice * candidateAlchQty == coinsGained)
-					{
-						alchedLostId = rawLostId;
-						alchedQty = candidateAlchQty;
-						alchedItemMarketPrice = itemManager.getItemPrice(canonicalLostId);
-						if (alchedItemMarketPrice <= 0)
-						{
-							alchedItemMarketPrice = haPrice;
-						}
-						alchedItemName = comp.getName();
-						break;
-					}
+			int haPrice = comp.getHaPrice();
+			if (haPrice <= 0 || coinsGained % haPrice != 0)
+			{
+				continue;
+			}
+
+			int quotient = coinsGained / haPrice;
+			int candidateAlchQty;
+			if (canonicalLostId == ItemID.NATURERUNE)
+			{
+				// The casting rune may come from the same stack: allow alch qty of
+				// lostQty - 1 (one nature spent casting) or lostQty.
+				if (lostQty >= 2 && quotient == lostQty - 1)
+				{
+					candidateAlchQty = quotient;
 				}
+				else if (quotient == lostQty)
+				{
+					candidateAlchQty = quotient;
+				}
+				else
+				{
+					continue;
+				}
+			}
+			else if (quotient >= 1 && quotient <= lostQty)
+			{
+				candidateAlchQty = quotient;
+			}
+			else
+			{
+				continue;
+			}
+
+			if (candidateAlchQty < bestAlchQty)
+			{
+				bestAlchQty = candidateAlchQty;
+				alchedLostId = rawLostId;
+				alchedQty = candidateAlchQty;
+				alchedItemMarketPrice = itemManager.getItemPrice(canonicalLostId);
+				if (alchedItemMarketPrice <= 0)
+				{
+					alchedItemMarketPrice = haPrice;
+				}
+				alchedItemName = comp.getName();
 			}
 		}
 

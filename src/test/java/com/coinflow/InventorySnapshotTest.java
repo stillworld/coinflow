@@ -158,4 +158,37 @@ public class InventorySnapshotTest
 		InventorySnapshot current = snapshot(100, 5);
 		Assert.assertTrue(current.getLostItems(previous).isEmpty());
 	}
+
+	@Test
+	public void normalizeContainerItemId_normalizesAllOpenContainersConsistently()
+	{
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.FISH_BARREL_CLOSED,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.FISH_BARREL_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.FISH_SACK_BARREL_CLOSED,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.FISH_SACK_BARREL_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.SEED_BOX,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.SEED_BOX_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.LOG_BASKET_CLOSED,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.LOG_BASKET_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.FORESTRY_BASKET_CLOSED,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.FORESTRY_BASKET_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.SLAYER_HERB_SACK,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.SLAYER_HERB_SACK_OPEN));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.GEM_BAG,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.GEM_BAG_OPEN));
+
+		// Light sources: lit lantern/candle/torch normalized to unlit
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.BULLSEYE_LANTERN_UNLIT,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.BULLSEYE_LANTERN_LIT));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.OIL_LANTERN_UNLIT,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.OIL_LANTERN_LIT));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.UNLIT_CANDLE,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.LIT_CANDLE));
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.TORCH_UNLIT,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.TORCH_LIT));
+
+		// Non-container item remains unchanged
+		Assert.assertEquals(net.runelite.api.gameval.ItemID.ABYSSAL_WHIP,
+			InventorySnapshotService.normalizeContainerItemId(net.runelite.api.gameval.ItemID.ABYSSAL_WHIP));
+	}
 }

@@ -7,7 +7,9 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.Skill;
+import net.runelite.client.game.ItemManager;
 
 /**
  * Registry and classifier for consumable supplies (potions, food, runes, ammo, and teleports).
@@ -26,6 +28,11 @@ public final class ConsumableRegistry
 		"amulet", "ring", "necklace", "bracelet", "pendant", "sceptre",
 		"crystal", "device", "waterskin", "bellows", "lockpick", "quiver",
 		"compass", "chronicle", "pouch", "horn"
+	));
+
+	// Drinkables that persist after use and are never consumed (e.g. Waterskin(4) -> Waterskin(0))
+	private static final Set<String> NON_CONSUMABLE_DRINKABLE_KEYWORDS = new HashSet<>(Collections.singletonList(
+		"waterskin"
 	));
 
 	public static final class PotionDose
@@ -50,67 +57,6 @@ public final class ConsumableRegistry
 		}
 	}
 
-	private static final Set<String> COMMON_FOODS = new HashSet<>();
-	static
-	{
-		// High tier & bossing food
-		COMMON_FOODS.add("shark");
-		COMMON_FOODS.add("cooked karambwan");
-		COMMON_FOODS.add("karambwan");
-		COMMON_FOODS.add("anglerfish");
-		COMMON_FOODS.add("manta ray");
-		COMMON_FOODS.add("monkfish");
-		COMMON_FOODS.add("sea turtle");
-		COMMON_FOODS.add("dark crab");
-
-		// Mid & standard food
-		COMMON_FOODS.add("lobster");
-		COMMON_FOODS.add("swordfish");
-		COMMON_FOODS.add("bass");
-		COMMON_FOODS.add("tuna");
-		COMMON_FOODS.add("salmon");
-		COMMON_FOODS.add("trout");
-		COMMON_FOODS.add("pike");
-		COMMON_FOODS.add("cooked meat");
-		COMMON_FOODS.add("cooked chicken");
-
-		// Baked goods & combos
-		COMMON_FOODS.add("cake");
-		COMMON_FOODS.add("2/3 cake");
-		COMMON_FOODS.add("slice of cake");
-		COMMON_FOODS.add("chocolate cake");
-		COMMON_FOODS.add("2/3 chocolate cake");
-		COMMON_FOODS.add("chocolate slice");
-		COMMON_FOODS.add("apple pie");
-		COMMON_FOODS.add("half an apple pie");
-		COMMON_FOODS.add("meat pie");
-		COMMON_FOODS.add("half a meat pie");
-		COMMON_FOODS.add("summer pie");
-		COMMON_FOODS.add("half a summer pie");
-		COMMON_FOODS.add("plain pizza");
-		COMMON_FOODS.add("1/2 plain pizza");
-		COMMON_FOODS.add("meat pizza");
-		COMMON_FOODS.add("1/2 meat pizza");
-		COMMON_FOODS.add("anchovy pizza");
-		COMMON_FOODS.add("1/2 anchovy pizza");
-		COMMON_FOODS.add("pineapple pizza");
-		COMMON_FOODS.add("1/2 pineapple pizza");
-		COMMON_FOODS.add("potato with cheese");
-		COMMON_FOODS.add("potato with butter");
-		COMMON_FOODS.add("tuna potato");
-		COMMON_FOODS.add("chili potato");
-		COMMON_FOODS.add("mushroom potato");
-		COMMON_FOODS.add("egg potato");
-		COMMON_FOODS.add("baked potato");
-		COMMON_FOODS.add("cooked sweetcorn");
-		COMMON_FOODS.add("purple sweets");
-
-		// Blighted foods
-		COMMON_FOODS.add("blighted anglerfish");
-		COMMON_FOODS.add("blighted manta ray");
-		COMMON_FOODS.add("blighted karambwan");
-	}
-
 	/**
 	 * Parses a potion name into its base name and dose count.
 	 * Returns null if the item name does not match a dose pattern.
@@ -127,12 +73,9 @@ public final class ConsumableRegistry
 		{
 			String base = m.group(1).trim();
 			String lower = base.toLowerCase(Locale.ROOT);
-			for (String keyword : NON_POTION_KEYWORDS)
+			if (containsKeyword(lower, NON_POTION_KEYWORDS))
 			{
-				if (lower.contains(keyword))
-				{
-					return null;
-				}
+				return null;
 			}
 
 			try
@@ -172,6 +115,7 @@ public final class ConsumableRegistry
 		BYPRODUCTS.add("empty bucket");
 		BYPRODUCTS.add("plant pot");
 		BYPRODUCTS.add("empty plant pot");
+		BYPRODUCTS.add("cocktail glass");
 	}
 
 	private static final Set<String> NON_CONSUMABLE_TELEPORT_SCROLLS = new HashSet<>();
@@ -338,10 +282,25 @@ public final class ConsumableRegistry
 		return false;
 	}
 
+	private static boolean containsKeyword(String lower, Set<String> keywords)
+	{
+		for (String keyword : keywords)
+		{
+			if (lower.contains(keyword))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * Determines whether the item is a consumable supply (potion, food, rune, ammo, teleport).
+	 * Food and drink are detected via the item's "Eat"/"Drink" inventory actions
+	 * (from its {@link ItemComposition}); potions, runes, ammo, and teleports are
+	 * detected by name patterns and also apply when the composition is unavailable.
 	 */
-	public static boolean isConsumable(int itemId, String itemName)
+	public static boolean isConsumable(int itemId, String itemName, ItemManager itemManager)
 	{
 		if (itemName == null || itemName.isEmpty())
 		{
@@ -366,23 +325,26 @@ public final class ConsumableRegistry
 			return false;
 		}
 
-		// 1. Potions (e.g. Stamina potion(4))
+		// 1. Inventory actions: anything with an Eat or Drink option is a consumable supply,
+		// except durable drinkables that persist after use (e.g. waterskins)
+		if (itemManager != null)
+		{
+			ItemComposition comp = itemManager.getItemComposition(itemId);
+			if (comp != null && comp.getInventoryActions() != null)
+			{
+				for (String action : comp.getInventoryActions())
+				{
+					if ("Eat".equalsIgnoreCase(action)
+						|| ("Drink".equalsIgnoreCase(action) && !containsKeyword(lower, NON_CONSUMABLE_DRINKABLE_KEYWORDS)))
+					{
+						return true;
+					}
+				}
+			}
+		}
+
+		// 2. Potions (e.g. Stamina potion(4))
 		if (parsePotion(itemName) != null)
-		{
-			return true;
-		}
-
-		// 2. Food
-		if (COMMON_FOODS.contains(lower))
-		{
-			return true;
-		}
-
-		// Food pattern matches (e.g. pie, pizza, potato, cake)
-		if (lower.endsWith(" pie") || lower.startsWith("half a") || lower.startsWith("half an")
-			|| lower.endsWith(" pizza") || lower.startsWith("1/2 ")
-			|| (lower.contains("potato") && !lower.contains("seed"))
-			|| lower.endsWith(" cake") || lower.endsWith(" slice"))
 		{
 			return true;
 		}

@@ -5,6 +5,7 @@ import com.coinflow.CoinFlowSession;
 import java.util.HashMap;
 import java.util.Map;
 import net.runelite.api.ItemComposition;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 import org.junit.Assert;
 import org.junit.Before;
@@ -269,5 +270,134 @@ public class ChargeDegradationHandlerTest
 		handler.reconcile(context);
 
 		Assert.assertTrue("Dharok's helm 75 must be suppressed from rawGains", context.getRawGains().isEmpty());
+	}
+
+	@Test
+	public void glory_5and4aloneInRawGains_suppressedFromGainsWithoutLoss()
+	{
+		Assert.assertTrue(ChargeDegradationHandler.isPartiallyDegraded("Amulet of glory(5)"));
+		Assert.assertTrue(ChargeDegradationHandler.isPartiallyDegraded("Amulet of glory(4)"));
+		Assert.assertTrue(ChargeDegradationHandler.isPartiallyDegraded("Combat bracelet(5)"));
+		Assert.assertTrue(ChargeDegradationHandler.isPartiallyDegraded("Skills necklace(5)"));
+		Assert.assertFalse(ChargeDegradationHandler.isPartiallyDegraded("Amulet of glory(6)"));
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(11976, 1); // Amulet of glory(5)
+		rawGains.put(1712, 1);  // Amulet of glory(4)
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Partially degraded glory (5) and (4) must be suppressed from rawGains", context.getRawGains().isEmpty());
+	}
+
+	@Test
+	public void extinguishingBullseyeLantern_cancelsGainsAndLosses()
+	{
+		stubItem(ItemID.BULLSEYE_LANTERN_LIT, "Bullseye lantern", 0L);
+		stubItem(ItemID.BULLSEYE_LANTERN_UNLIT, "Bullseye lantern (unlit)", 680L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(ItemID.BULLSEYE_LANTERN_UNLIT, 1);
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(ItemID.BULLSEYE_LANTERN_LIT, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Unlit lantern must be removed from rawGains without generating 680gp phantom profit",
+			context.getRawGains().isEmpty());
+		Assert.assertTrue("Lit lantern must be removed from rawLosses",
+			context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void lightingBullseyeLantern_cancelsGainsAndLosses()
+	{
+		stubItem(ItemID.BULLSEYE_LANTERN_UNLIT, "Bullseye lantern (unlit)", 680L);
+		stubItem(ItemID.BULLSEYE_LANTERN_LIT, "Bullseye lantern", 0L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(ItemID.BULLSEYE_LANTERN_LIT, 1);
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(ItemID.BULLSEYE_LANTERN_UNLIT, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Lit lantern must be removed from rawGains", context.getRawGains().isEmpty());
+		Assert.assertTrue("Unlit lantern must be removed from rawLosses", context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void litBullseyeLantern_aloneInRawGains_suppressedFromGains()
+	{
+		stubItem(ItemID.BULLSEYE_LANTERN_LIT, "Bullseye lantern (lit)", 0L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(ItemID.BULLSEYE_LANTERN_LIT, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Lit lantern in rawGains must be suppressed", context.getRawGains().isEmpty());
 	}
 }

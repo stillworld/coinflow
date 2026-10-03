@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 
 /**
@@ -89,7 +90,8 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 					int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 					String gainedName = context.getItemName(canonicalGainedId);
 
-					if (isChargeDegradationPair(lostName, gainedName))
+					if (isChargeDegradationPair(lostName, gainedName)
+						|| isLightSourcePair(canonicalLostId, canonicalGainedId, lostName, gainedName))
 					{
 						gainedMatchId = gainedId;
 						break;
@@ -119,12 +121,12 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 						rawLosses.put(lostId, lostQty - matched);
 					}
 
-					log.debug("Reconciled charge degradation: {} -> {} (x{})", lostName, context.getItemName(gainedMatchId), matched);
+					log.debug("Reconciled degradation/transition: {} -> {} (x{})", lostName, context.getItemName(gainedMatchId), matched);
 				}
 			}
 		}
 
-		// Suppress any lingering partially degraded items in rawGains (e.g. Slayer ring (2))
+		// Suppress any lingering partially degraded items or lit light sources in rawGains (e.g. Slayer ring (2))
 		// Partially degraded items cannot be obtained as drops or loot and indicate owned items
 		// degrading across split ticks, teleport scene transitions, or unequipped after use.
 		if (!rawGains.isEmpty())
@@ -134,10 +136,10 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 			{
 				int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 				String gainedName = context.getItemName(canonicalGainedId);
-				if (isPartiallyDegraded(gainedName))
+				if (isPartiallyDegraded(gainedName) || isLitLightSource(canonicalGainedId, gainedName))
 				{
 					rawGains.remove(gainedId);
-					log.debug("Suppressed partially degraded item from profit gains: {}", gainedName);
+					log.debug("Suppressed partially degraded or lit item from profit gains: {}", gainedName);
 				}
 			}
 		}
@@ -228,7 +230,7 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 		}
 		if (lowerBase.contains("glory") || lowerBase.contains("combat bracelet") || lowerBase.contains("skills necklace"))
 		{
-			return charges < 4;
+			return charges < 6;
 		}
 		if (lowerBase.contains("necklace of passage") || lowerBase.contains("burning amulet")
 			|| lowerBase.contains("digsite pendant") || lowerBase.contains("ring of wealth")
@@ -258,5 +260,78 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 			case "25": return "0";
 			default: return null;
 		}
+	}
+
+	public static boolean isLightSourcePair(int lostId, int gainedId, String lostName, String gainedName)
+	{
+		if ((lostId == ItemID.BULLSEYE_LANTERN_LIT && gainedId == ItemID.BULLSEYE_LANTERN_UNLIT)
+			|| (lostId == ItemID.BULLSEYE_LANTERN_UNLIT && gainedId == ItemID.BULLSEYE_LANTERN_LIT)
+			|| (lostId == ItemID.BULLSEYE_LANTERN_LIT_LUNAR_QUEST && gainedId == ItemID.BULLSEYE_LANTERN_UNLIT_LUNAR_QUEST)
+			|| (lostId == ItemID.BULLSEYE_LANTERN_UNLIT_LUNAR_QUEST && gainedId == ItemID.BULLSEYE_LANTERN_LIT_LUNAR_QUEST)
+			|| (lostId == ItemID.OIL_LANTERN_LIT && gainedId == ItemID.OIL_LANTERN_UNLIT)
+			|| (lostId == ItemID.OIL_LANTERN_UNLIT && gainedId == ItemID.OIL_LANTERN_LIT)
+			|| (lostId == ItemID.CANDLE_LANTERN_LIT && gainedId == ItemID.CANDLE_LANTERN_UNLIT)
+			|| (lostId == ItemID.CANDLE_LANTERN_UNLIT && gainedId == ItemID.CANDLE_LANTERN_LIT)
+			|| (lostId == ItemID.CANDLE_LANTERN_BLACK_LIT && gainedId == ItemID.CANDLE_LANTERN_BLACK_UNLIT)
+			|| (lostId == ItemID.CANDLE_LANTERN_BLACK_UNLIT && gainedId == ItemID.CANDLE_LANTERN_BLACK_LIT)
+			|| (lostId == ItemID.OIL_LAMP_LIT && gainedId == ItemID.OIL_LAMP_UNLIT)
+			|| (lostId == ItemID.OIL_LAMP_UNLIT && gainedId == ItemID.OIL_LAMP_LIT)
+			|| (lostId == ItemID.TOG_SAPPHIRE_LANTERN_LIT && gainedId == ItemID.TOG_SAPPHIRE_LANTERN_UNLIT)
+			|| (lostId == ItemID.TOG_SAPPHIRE_LANTERN_UNLIT && gainedId == ItemID.TOG_SAPPHIRE_LANTERN_LIT)
+			|| (lostId == ItemID.CAVE_GOBLIN_MINING_HELMET_LIT && gainedId == ItemID.CAVE_GOBLIN_MINING_HELMET_UNLIT)
+			|| (lostId == ItemID.CAVE_GOBLIN_MINING_HELMET_UNLIT && gainedId == ItemID.CAVE_GOBLIN_MINING_HELMET_LIT)
+			|| (lostId == ItemID.LIT_CANDLE && gainedId == ItemID.UNLIT_CANDLE)
+			|| (lostId == ItemID.UNLIT_CANDLE && gainedId == ItemID.LIT_CANDLE)
+			|| (lostId == ItemID.LIT_BLACK_CANDLE && gainedId == ItemID.UNLIT_BLACK_CANDLE)
+			|| (lostId == ItemID.UNLIT_BLACK_CANDLE && gainedId == ItemID.LIT_BLACK_CANDLE)
+			|| (lostId == ItemID.TORCH_LIT && gainedId == ItemID.TORCH_UNLIT)
+			|| (lostId == ItemID.TORCH_UNLIT && gainedId == ItemID.TORCH_LIT))
+		{
+			return true;
+		}
+
+		if (lostName != null && gainedName != null)
+		{
+			String l = lostName.toLowerCase(java.util.Locale.ROOT);
+			String g = gainedName.toLowerCase(java.util.Locale.ROOT);
+			String lBase = l.replace(" (lit)", "").replace(" lit", "").replace(" (unlit)", "").replace(" unlit", "").trim();
+			String gBase = g.replace(" (lit)", "").replace(" lit", "").replace(" (unlit)", "").replace(" unlit", "").trim();
+			if (!lBase.isEmpty() && lBase.equals(gBase))
+			{
+				boolean lIsLit = l.contains("lit");
+				boolean gIsLit = g.contains("lit");
+				if (lIsLit || gIsLit)
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	public static boolean isLitLightSource(int id, String name)
+	{
+		if (id == ItemID.BULLSEYE_LANTERN_LIT
+			|| id == ItemID.BULLSEYE_LANTERN_LIT_LUNAR_QUEST
+			|| id == ItemID.OIL_LANTERN_LIT
+			|| id == ItemID.CANDLE_LANTERN_LIT
+			|| id == ItemID.CANDLE_LANTERN_BLACK_LIT
+			|| id == ItemID.OIL_LAMP_LIT
+			|| id == ItemID.TOG_SAPPHIRE_LANTERN_LIT
+			|| id == ItemID.CAVE_GOBLIN_MINING_HELMET_LIT
+			|| id == ItemID.LIT_CANDLE
+			|| id == ItemID.LIT_BLACK_CANDLE
+			|| id == ItemID.TORCH_LIT)
+		{
+			return true;
+		}
+		if (name != null)
+		{
+			String lower = name.toLowerCase(java.util.Locale.ROOT);
+			return (lower.contains("lantern") || lower.contains("candle") || lower.contains("torch") || lower.contains("lamp") || lower.contains("helmet"))
+				&& (lower.contains("(lit)") || lower.startsWith("lit ") || lower.endsWith(" (lit)"));
+		}
+		return false;
 	}
 }

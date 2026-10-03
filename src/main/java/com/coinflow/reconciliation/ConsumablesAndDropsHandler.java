@@ -41,7 +41,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				continue;
 			}
 
-			boolean isConsumable = ConsumableRegistry.isConsumable(itemId, itemName)
+			boolean isConsumable = ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
 				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName);
 
 			if (isConsumable)

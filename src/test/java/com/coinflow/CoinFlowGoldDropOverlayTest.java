@@ -73,4 +73,25 @@ public class CoinFlowGoldDropOverlayTest
 		Assert.assertEquals(640, loc.getX()); // 800 - 160
 		Assert.assertEquals(160, loc.getY());
 	}
+
+	@Test
+	public void render_loadsImageForDropItemId()
+	{
+		net.runelite.api.Player player = mock(net.runelite.api.Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		when(client.getCanvasWidth()).thenReturn(800);
+
+		java.awt.Graphics2D graphics = mock(java.awt.Graphics2D.class);
+		java.awt.FontMetrics fontMetrics = mock(java.awt.FontMetrics.class);
+		when(graphics.getFontMetrics()).thenReturn(fontMetrics);
+		when(fontMetrics.stringWidth(org.mockito.ArgumentMatchers.anyString())).thenReturn(50);
+
+		net.runelite.client.util.AsyncBufferedImage img = mock(net.runelite.client.util.AsyncBufferedImage.class);
+		when(itemManager.getImage(1513)).thenReturn(img);
+
+		overlay.addDrop("+500 gp", 1513, 0);
+		overlay.render(graphics);
+
+		org.mockito.Mockito.verify(itemManager).getImage(1513);
+	}
 }
