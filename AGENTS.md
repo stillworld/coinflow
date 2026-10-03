@@ -17,6 +17,8 @@
 - `InterfaceTracker.java`: Tracks open widget interfaces (Bank, GE, Trade, Shops, Death Storage) to prevent false profit/loss.
 - `ConsumableRegistry.java`: Catalog of potions, foods, teleports, and degradation states with item IDs & dose rules. `isConsumable(id, name, itemManager)` classifies food/drink via `ItemComposition.getInventoryActions()` (`Eat`/`Drink`), falling back to name rules for potions, runes, ammo, and teleports.
 - `WeaponChargeTracker.java`: Tracks supplies consumed inside charged weapons (tridents, blowpipe, bowfa, etc.). Attack graphics/animations are the primary signal; `CHARGES_*_QUANTITY` varbit deltas are also polled each tick, converted to resource spend (blowpipe scales/darts, trident runes, crystal shards), and deduplicated against attack-triggered charges so a charge is never counted twice. Emitted as supply expenses on the game tick.
+- `GrandExchangeTracker.java`: Settles GE buy/sell fills from `GrandExchangeOfferChanged` events (independent of suppressed inventory diffs). Buy fills only record FIFO cost basis; sell fills decompose by carried value — GE basis (real margin), session tracked gains (estimate correction), or the gross fill price for untracked stock (records only the GE tax). Collections remain re-baselined so proceeds are never double counted. `EMPTY` events are a login flood unless the client is `LOGGED_IN`, in which case they are a genuine slot clear. Observations are seeded from `client.getGrandExchangeOffers()` on startUp/reset.
+- `GrandExchangeTax.java`: `GrandExchangeOffer.getSpent()` is **gross (pre-tax)** for sells. Net proceeds = gross − per-item tax (2%, floored, capped 5m/item, exempt-item list). Tax on untracked sells surfaces as its own `"GE Tax"` expense row keyed by `ItemID.COINS_10000` (coins-pile icon) so it isn't blended into the generic "Coins" row; tax embedded in tracked/basis residuals stays folded into those residuals since it can't be separated from price drift.
 - `CoinFlowInputFilter.java`: Filters chatbox/menu inputs and validates triggers.
 
 ### Reconciliation Engine (`src/main/java/com/coinflow/reconciliation/`)
@@ -36,7 +38,7 @@
 
 ### Tests (`src/test/java/com/coinflow/`)
 - `TestHelpers.java`: Mockito builders for `Client`, `ItemManager`, `ItemContainer`, fake items, and snapshots.
-- Unit tests: `CoinFlowPluginTest`, `CoinFlowPluginEventTest`, `CoinFlowSessionTest`, `GoalModeTest`, `CoinFlowOverlayTest`, `CoinFlowGoldDropOverlayTest`, `InventorySnapshotTest`, `CoinFlowInputFilterTest`, `ConsumableRegistryTest`.
+- Unit tests: `CoinFlowPluginTest`, `CoinFlowPluginEventTest`, `CoinFlowPluginGeTest`, `CoinFlowSessionTest`, `GoalModeTest`, `CoinFlowOverlayTest`, `CoinFlowGoldDropOverlayTest`, `InventorySnapshotTest`, `CoinFlowInputFilterTest`, `ConsumableRegistryTest`, `GrandExchangeTrackerTest`.
 - Reconciliation tests: `reconciliation/UniversalSkillSinkTest`, `reconciliation/ChargeDegradationHandlerTest`, `reconciliation/ProcessingPatternRegistryTest`.
 
 
