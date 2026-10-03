@@ -40,6 +40,7 @@ import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
@@ -176,6 +177,13 @@ public class CoinFlowPlugin extends Plugin
 	 * via CHARGES_*_QUANTITY varbits, which never produce an inventory diff.
 	 */
 	final WeaponChargeTracker weaponChargeTracker = new WeaponChargeTracker();
+
+	/**
+	 * Tracks Grand Exchange offers and settles buy/sell fills against carried
+	 * values (GE cost basis, session tracked gains, or the offer price), since
+	 * GE activity is invisible to inventory diffing by design.
+	 */
+	final GrandExchangeTracker grandExchangeTracker = new GrandExchangeTracker();
 
 	/**
 	 * Number of game ticks remaining to suppress diffing for in-flight items
@@ -365,6 +373,7 @@ public class CoinFlowPlugin extends Plugin
 		snapshotInitialized = false;
 		lootingBagInitialized = false;
 		interfaceTracker.reset(client != null && client.getGameState() != null ? client.getGameState() : GameState.UNKNOWN);
+		grandExchangeTracker.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -387,7 +396,11 @@ public class CoinFlowPlugin extends Plugin
 		// If we're already logged in (plugin enabled mid-session), take baseline now
 		if (client != null && client.getGameState() == GameState.LOGGED_IN)
 		{
-			clientThread.invokeLater(this::takeBaseline);
+			clientThread.invokeLater(() ->
+			{
+				takeBaseline();
+				grandExchangeTracker.seed(client.getGrandExchangeOffers());
+			});
 		}
 	}
 
@@ -411,6 +424,7 @@ public class CoinFlowPlugin extends Plugin
 		lootingBagInitialized = false;
 		resetTransientTrackingState();
 		interfaceTracker.reset(GameState.UNKNOWN);
+		grandExchangeTracker.reset();
 	}
 
 	@Provides
@@ -1054,6 +1068,58 @@ public class CoinFlowPlugin extends Plugin
 				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
 			weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
 				client.getTickCount());
+		}
+	}
+
+	@Subscribe
+	public void onGrandExchangeOfferChanged(GrandExchangeOfferChanged event)
+	{
+		if (session == null)
+		{
+			return;
+		}
+
+		boolean loggedIn = client != null && client.getGameState() == GameState.LOGGED_IN;
+		for (GrandExchangeTracker.GeDelta delta : grandExchangeTracker.onOfferChanged(event.getSlot(), event.getOffer(), loggedIn))
+		{
+			int itemId = itemManager != null ? itemManager.canonicalize(delta.itemId) : delta.itemId;
+			if (itemId <= 0)
+			{
+				continue;
+			}
+			if (delta.buy)
+			{
+				grandExchangeTracker.addBasis(itemId, delta.quantityDelta, delta.coinsDelta);
+			}
+			else
+			{
+				applyGeLedger(
+					grandExchangeTracker.settleSell(itemId, delta.quantityDelta, delta.coinsDelta, session),
+					itemId);
+			}
+		}
+	}
+
+	/**
+	 * Applies GE settlement entries to the session and pops a gold drop for the
+	 * realized net delta (flip margin, drift correction) when positive.
+	 */
+	private void applyGeLedger(GrandExchangeTracker.GeLedger ledger, int soldItemId)
+	{
+		if (ledger.isEmpty() || session == null)
+		{
+			return;
+		}
+
+		Map<Integer, CoinFlowSession.TrackedItem> expenses =
+			(config != null && !config.trackSpent()) ? Collections.emptyMap() : ledger.expenses;
+		session = session.withGainsLossesAndExpenses(ledger.gains, ledger.deductions, expenses);
+
+		if (config != null && config.showGoldDrops() && goldDropOverlay != null
+			&& ledger.netDelta > 0 && ledger.netDelta >= config.goldDropMinThreshold())
+		{
+			String dropText = "+" + QuantityFormatter.quantityToStackSize(ledger.netDelta) + " gp";
+			goldDropOverlay.addDrop(dropText, soldItemId, 0);
 		}
 	}
 
@@ -3370,6 +3436,11 @@ public class CoinFlowPlugin extends Plugin
 		}
 		session = CoinFlowSession.createNew();
 		goalCompletedNotified = false;
+		grandExchangeTracker.reset();
+		if (client != null && client.getGameState() == GameState.LOGGED_IN)
+		{
+			grandExchangeTracker.seed(client.getGrandExchangeOffers());
+		}
 		lootingBagInitialized = false;
 		resetTransientTrackingState();
 		// Invalidate the baseline immediately: any inventory event before the deferred
