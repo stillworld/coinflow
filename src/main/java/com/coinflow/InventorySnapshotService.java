@@ -124,20 +124,7 @@ public class InventorySnapshotService
 			Item item = items[i];
 			if (item != null)
 			{
-				int id = item.getId();
-				if (id == ItemID.FISH_SACK_BARREL_OPEN)
-				{
-					id = ItemID.FISH_SACK_BARREL_CLOSED;
-				}
-				else if (id == ItemID.LOG_BASKET_OPEN)
-				{
-					id = ItemID.LOG_BASKET_CLOSED;
-				}
-				else if (id == ItemID.FORESTRY_BASKET_OPEN)
-				{
-					id = ItemID.FORESTRY_BASKET_CLOSED;
-				}
-				ids[i] = id;
+				ids[i] = normalizeContainerItemId(item.getId());
 				qtys[i] = item.getQuantity();
 			}
 			else
@@ -192,66 +179,21 @@ public class InventorySnapshotService
 				if (isLootingBag(id))
 				{
 					hasBag = true;
-					id = ItemID.LOOTING_BAG;
 				}
 				if (isMasterScrollBook(id))
 				{
 					hasScrollBook = true;
-					id = ItemID.BOOKOFSCROLLS_CHARGED;
 				}
 				if (isDizanasQuiver(id))
 				{
 					hasQuiver = true;
-					id = ItemID.DIZANAS_QUIVER_CHARGED;
 				}
-				if (isGemBag(id))
-				{
-					id = ItemID.GEM_BAG;
-				}
-				else if (isGemPouch(id))
-				{
-					id = ItemID.GEM_POUCH;
-				}
-				else if (isGemSatchel(id))
-				{
-					id = ItemID.GEM_SATCHEL;
-				}
-				else if (isGemTote(id))
-				{
-					id = ItemID.GEM_TOTE;
-				}
-				else if (isGemSack(id))
-				{
-					id = ItemID.GEM_SACK;
-				}
-				else if (isOpenHerbSack(id))
-				{
-					id = (id == ItemID.SLAYER_HERB_SACK_SILK_OPEN) ? ItemID.SLAYER_HERB_SACK_SILK : ItemID.SLAYER_HERB_SACK;
-				}
-				else if (id == ItemID.FISH_BARREL_OPEN)
-				{
-					id = ItemID.FISH_BARREL_CLOSED;
-				}
-				else if (id == ItemID.FISH_SACK_BARREL_OPEN)
-				{
-					id = ItemID.FISH_SACK_BARREL_CLOSED;
-				}
-				else if (id == ItemID.SEED_BOX_OPEN)
-				{
-					id = ItemID.SEED_BOX;
-				}
-				else if (id == ItemID.LOG_BASKET_OPEN)
-				{
-					id = ItemID.LOG_BASKET_CLOSED;
-				}
-				else if (id == ItemID.FORESTRY_BASKET_OPEN)
-				{
-					id = ItemID.FORESTRY_BASKET_CLOSED;
-				}
-				else if (isAshSanctifier(id))
+				if (isAshSanctifier(id))
 				{
 					hasSanctifier = true;
 				}
+
+				id = normalizeContainerItemId(id);
 				map.merge(id, qty, Integer::sum);
 			}
 		}
@@ -817,6 +759,117 @@ public class InventorySnapshotService
 	public static boolean isOpenLogBasket(int itemId)
 	{
 		return itemId == ItemID.LOG_BASKET_OPEN || itemId == ItemID.FORESTRY_BASKET_OPEN;
+	}
+
+	/**
+	 * Canonicalizes open container items (fish barrels, seed boxes, herb sacks, gem bags/sacks, log baskets)
+	 * to their base/closed container forms so opening/closing containers and equipment swaps never cause
+	 * spurious profit, loss, or mismatched snapshot IDs.
+	 */
+	public static int normalizeContainerItemId(int id)
+	{
+		if (isLootingBag(id))
+		{
+			return ItemID.LOOTING_BAG;
+		}
+		if (id == ItemID.BOOKOFSCROLLS_EMPTY)
+		{
+			return ItemID.BOOKOFSCROLLS_CHARGED;
+		}
+		if (isDizanasQuiver(id))
+		{
+			return ItemID.DIZANAS_QUIVER_CHARGED;
+		}
+		if (isGemBag(id))
+		{
+			return ItemID.GEM_BAG;
+		}
+		if (isGemPouch(id))
+		{
+			return ItemID.GEM_POUCH;
+		}
+		if (isGemSatchel(id))
+		{
+			return ItemID.GEM_SATCHEL;
+		}
+		if (isGemTote(id))
+		{
+			return ItemID.GEM_TOTE;
+		}
+		if (isGemSack(id))
+		{
+			return ItemID.GEM_SACK;
+		}
+		if (isOpenHerbSack(id))
+		{
+			return (id == ItemID.SLAYER_HERB_SACK_SILK_OPEN) ? ItemID.SLAYER_HERB_SACK_SILK : ItemID.SLAYER_HERB_SACK;
+		}
+		if (id == ItemID.FISH_BARREL_OPEN)
+		{
+			return ItemID.FISH_BARREL_CLOSED;
+		}
+		if (id == ItemID.FISH_SACK_BARREL_OPEN)
+		{
+			return ItemID.FISH_SACK_BARREL_CLOSED;
+		}
+		if (id == ItemID.SEED_BOX_OPEN)
+		{
+			return ItemID.SEED_BOX;
+		}
+		if (id == ItemID.LOG_BASKET_OPEN)
+		{
+			return ItemID.LOG_BASKET_CLOSED;
+		}
+		if (id == ItemID.FORESTRY_BASKET_OPEN)
+		{
+			return ItemID.FORESTRY_BASKET_CLOSED;
+		}
+		// Light sources: normalize lit variant to unlit variant to prevent extinguishing/lighting from triggering phantom profit/losses
+		if (id == ItemID.BULLSEYE_LANTERN_LIT)
+		{
+			return ItemID.BULLSEYE_LANTERN_UNLIT;
+		}
+		if (id == ItemID.BULLSEYE_LANTERN_LIT_LUNAR_QUEST)
+		{
+			return ItemID.BULLSEYE_LANTERN_UNLIT_LUNAR_QUEST;
+		}
+		if (id == ItemID.OIL_LANTERN_LIT)
+		{
+			return ItemID.OIL_LANTERN_UNLIT;
+		}
+		if (id == ItemID.CANDLE_LANTERN_LIT)
+		{
+			return ItemID.CANDLE_LANTERN_UNLIT;
+		}
+		if (id == ItemID.CANDLE_LANTERN_BLACK_LIT)
+		{
+			return ItemID.CANDLE_LANTERN_BLACK_UNLIT;
+		}
+		if (id == ItemID.OIL_LAMP_LIT)
+		{
+			return ItemID.OIL_LAMP_UNLIT;
+		}
+		if (id == ItemID.TOG_SAPPHIRE_LANTERN_LIT)
+		{
+			return ItemID.TOG_SAPPHIRE_LANTERN_UNLIT;
+		}
+		if (id == ItemID.CAVE_GOBLIN_MINING_HELMET_LIT)
+		{
+			return ItemID.CAVE_GOBLIN_MINING_HELMET_UNLIT;
+		}
+		if (id == ItemID.LIT_CANDLE)
+		{
+			return ItemID.UNLIT_CANDLE;
+		}
+		if (id == ItemID.LIT_BLACK_CANDLE)
+		{
+			return ItemID.UNLIT_BLACK_CANDLE;
+		}
+		if (id == ItemID.TORCH_LIT)
+		{
+			return ItemID.TORCH_UNLIT;
+		}
+		return id;
 	}
 
 	/**

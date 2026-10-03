@@ -125,6 +125,7 @@ public class ItemNotingHandlerTest
 		rawGains.put(UNNOTED_TEAK_PLANK, 27);
 
 		ReconciliationContext context = createContext(rawGains, rawLosses);
+		context.setNotingService(true);
 		handler.reconcile(context);
 
 		Assert.assertTrue("rawLosses for planks and exact fee coins should be cleared", context.getRawLosses().isEmpty());
@@ -149,6 +150,7 @@ public class ItemNotingHandlerTest
 		rawGains.put(NOTED_DARK_CRAB, 20);
 
 		ReconciliationContext context = createContext(rawGains, rawLosses);
+		context.setNotingService(true);
 		handler.reconcile(context);
 
 		Assert.assertTrue(context.getRawLosses().isEmpty());
@@ -207,6 +209,7 @@ public class ItemNotingHandlerTest
 		rawGains.put(UNNOTED_TEAK_PLANK, 10);
 
 		ReconciliationContext context = createContext(rawGains, rawLosses);
+		context.setNotingService(true);
 		handler.reconcile(context);
 
 		Assert.assertTrue(context.getRawGains().isEmpty());
@@ -218,6 +221,29 @@ public class ItemNotingHandlerTest
 		// 150 coins remaining in rawLosses
 		Assert.assertEquals(1, context.getRawLosses().size());
 		Assert.assertEquals(Integer.valueOf(150), context.getRawLosses().get(ItemID.COINS));
+	}
+
+	@Test
+	public void coincidentalCoinLoss_withoutNotingServiceIntent_noFeeAttributed()
+	{
+		// Note swap + unrelated coin loss in the same tick (e.g. free Tool Leprechaun
+		// noting while coins left for another reason): the coins must NOT be eaten
+		// as a service fee without a noting-service click intent.
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(UNNOTED_RANARR, 8);
+		rawLosses.put(ItemID.COINS, 40);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(NOTED_RANARR, 8);
+
+		ReconciliationContext context = createContext(rawGains, rawLosses);
+		handler.reconcile(context);
+
+		// The swap is still reconciled...
+		Assert.assertTrue(context.getRawGains().isEmpty());
+		// ...but the coins remain in rawLosses for other handlers, and no fee is recorded
+		Assert.assertEquals(Integer.valueOf(40), context.getRawLosses().get(ItemID.COINS));
+		Assert.assertTrue("No fee expense without noting-service intent", context.getSupplyExpenses().isEmpty());
 	}
 
 	@Test

@@ -60,13 +60,13 @@ public class CoinFlowOverlay extends OverlayPanel
 		}
 
 		boolean includeAfk = config.includeAfkTime();
-		boolean isIdle = session.isIdle() && !includeAfk;
+		boolean isIdle = session.isIdle();
 
 		FontMetrics fontMetrics = graphics.getFontMetrics();
 		int maxLineWidth = MIN_PANEL_WIDTH;
 
 		// ── Title ────────────────────────────────────────────────────
-		String titleText = isIdle ? "Coin Flow (idle)" : "Coin Flow";
+		String titleText = formatTitle(isIdle);
 		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(titleText));
 		panelComponent.getChildren().add(TitleComponent.builder()
 			.text(titleText)
@@ -119,7 +119,7 @@ public class CoinFlowOverlay extends OverlayPanel
 		// ── Active / Session Time ─────────────────────────────────────
 		Duration displayTime = session.getTime(includeAfk);
 		String timeLeft = "Time:";
-		String timeRight = formatDuration(displayTime);
+		String timeRight = formatTimeRight(displayTime, isIdle, includeAfk);
 		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(timeLeft) + fontMetrics.stringWidth(timeRight) + COLUMN_SPACING);
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(timeLeft)
@@ -196,5 +196,21 @@ public class CoinFlowOverlay extends OverlayPanel
 			return String.format("%d:%02d:%02d", hours, minutes, seconds);
 		}
 		return String.format("%02d:%02d", minutes, seconds);
+	}
+
+	/**
+	 * Formats the overlay title text based on idle state.
+	 */
+	static String formatTitle(boolean isIdle)
+	{
+		return isIdle ? "Coin Flow (idle)" : "Coin Flow";
+	}
+
+	/**
+	 * Formats the right-side Time text in the overlay based on idle and includeAfk configuration.
+	 */
+	static String formatTimeRight(Duration displayTime, boolean isIdle, boolean includeAfk)
+	{
+		return formatDuration(displayTime) + (isIdle ? (includeAfk ? " (idle)" : " (paused)") : "");
 	}
 }

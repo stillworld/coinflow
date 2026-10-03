@@ -1,10 +1,28 @@
 package com.coinflow;
 
+import net.runelite.api.ItemComposition;
+import net.runelite.client.game.ItemManager;
 import org.junit.Assert;
 import org.junit.Test;
+import org.mockito.Mockito;
 
 public class ConsumableRegistryTest
 {
+	private static boolean isConsumable(int itemId, String itemName)
+	{
+		return ConsumableRegistry.isConsumable(itemId, itemName, null);
+	}
+
+	private static ItemManager mockItemManager(int itemId, String name, String... actions)
+	{
+		ItemComposition comp = Mockito.mock(ItemComposition.class);
+		Mockito.when(comp.getName()).thenReturn(name);
+		Mockito.when(comp.getInventoryActions()).thenReturn(actions);
+		ItemManager itemManager = Mockito.mock(ItemManager.class);
+		Mockito.when(itemManager.getItemComposition(itemId)).thenReturn(comp);
+		return itemManager;
+	}
+
 	@Test
 	public void parsePotion_validDoses_extractedCorrectly()
 	{
@@ -36,113 +54,142 @@ public class ConsumableRegistryTest
 	@Test
 	public void isConsumable_potions_true()
 	{
-		Assert.assertTrue(ConsumableRegistry.isConsumable(1, "Stamina potion(4)"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(2, "Prayer potion(2)"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(3, "Divine super combat potion(4)"));
+		Assert.assertTrue(isConsumable(1, "Stamina potion(4)"));
+		Assert.assertTrue(isConsumable(2, "Prayer potion(2)"));
+		Assert.assertTrue(isConsumable(3, "Divine super combat potion(4)"));
 	}
 
 	@Test
-	public void isConsumable_cookedFood_true()
+	public void isConsumable_foodEatAction_true()
 	{
-		Assert.assertTrue(ConsumableRegistry.isConsumable(10, "Shark"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(11, "Cooked karambwan"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(12, "Anglerfish"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(13, "Apple pie"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(14, "Pineapple pizza"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(15, "Potato with cheese"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(16, "Purple sweets"));
+		String[] foods = {
+			"Shark", "Cooked karambwan", "Anglerfish", "Apple pie", "Pineapple pizza",
+			"Potato with cheese", "Purple sweets", "Wild pie", "Half a wild pie",
+			"Spicy stew", "Curry", "Ugthanki kebab", "Rainbow fish", "Shrimps",
+			"Roast beast meat", "Thin snail meat", "Strawberry",
+			"Cooked moonlight antelope", "Premade t'd crunch",
+		};
+
+		for (int i = 0; i < foods.length; i++)
+		{
+			int id = 10 + i;
+			ItemManager itemManager = mockItemManager(id, foods[i], "Eat", "Drop");
+			Assert.assertTrue(foods[i], ConsumableRegistry.isConsumable(id, foods[i], itemManager));
+		}
+	}
+
+	@Test
+	public void isConsumable_foodWithoutEatAction_false()
+	{
+		// Food names alone are not sufficient; the item must expose an Eat action
+		Assert.assertFalse(isConsumable(30, "Shark"));
+		Assert.assertFalse(isConsumable(31, "Cooked karambwan"));
+		Assert.assertFalse(isConsumable(32, "Anglerfish"));
+	}
+
+	@Test
+	public void isConsumable_drinkAction_true()
+	{
+		String[] drinks = {"Wizard blizzard", "Dwarven stout", "Jug of wine", "Beer", "Braindeath 'rum'"};
+
+		for (int i = 0; i < drinks.length; i++)
+		{
+			int id = 100 + i;
+			ItemManager itemManager = mockItemManager(id, drinks[i], "Drink", "Drop");
+			Assert.assertTrue(drinks[i], ConsumableRegistry.isConsumable(id, drinks[i], itemManager));
+		}
 	}
 
 	@Test
 	public void isConsumable_rawFood_false()
 	{
-		Assert.assertFalse(ConsumableRegistry.isConsumable(20, "Raw shark"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(21, "Raw karambwan"));
+		Assert.assertFalse(isConsumable(20, "Raw shark"));
+		Assert.assertFalse(isConsumable(21, "Raw karambwan"));
 	}
 
 	@Test
 	public void isConsumable_runes_true_essence_false()
 	{
-		Assert.assertTrue(ConsumableRegistry.isConsumable(30, "Fire rune"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(31, "Death rune"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(32, "Blood rune"));
+		Assert.assertTrue(isConsumable(30, "Fire rune"));
+		Assert.assertTrue(isConsumable(31, "Death rune"));
+		Assert.assertTrue(isConsumable(32, "Blood rune"));
 
-		Assert.assertFalse(ConsumableRegistry.isConsumable(33, "Pure essence"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(34, "Rune essence"));
+		Assert.assertFalse(isConsumable(33, "Pure essence"));
+		Assert.assertFalse(isConsumable(34, "Rune essence"));
 	}
 
 	@Test
 	public void isConsumable_ammunition_true()
 	{
-		Assert.assertTrue(ConsumableRegistry.isConsumable(40, "Dragon bolts (e)"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(41, "Rune arrow"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(42, "Adamant dart"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(43, "Red chinchompa"));
+		Assert.assertTrue(isConsumable(40, "Dragon bolts (e)"));
+		Assert.assertTrue(isConsumable(41, "Rune arrow"));
+		Assert.assertTrue(isConsumable(42, "Adamant dart"));
+		Assert.assertTrue(isConsumable(43, "Red chinchompa"));
 	}
 
 	@Test
 	public void isConsumable_teleports_true()
 	{
-		Assert.assertTrue(ConsumableRegistry.isConsumable(50, "Varrock teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(51, "Teleport to house"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(52, "Teleport to target"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(53, "House tab"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(54, "Lumbridge teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(55, "Camelot teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(56, "Zul-andra teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(57, "Nardah teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(58, "Digsite teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(59, "Ardeaglais teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(34033, "Ardeaglais teleport"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(70, "Colossal wyrm teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(71, "Chasm teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(72, "Target teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(73, "Lumberyard teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(74, "Watson teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(75, "Nardah teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(76, "Digsite teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(77, "Feldip hills teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(78, "Teleport scroll"));
-		Assert.assertTrue(ConsumableRegistry.isConsumable(79, "Icy basalt"));
+		Assert.assertTrue(isConsumable(50, "Varrock teleport"));
+		Assert.assertTrue(isConsumable(51, "Teleport to house"));
+		Assert.assertTrue(isConsumable(52, "Teleport to target"));
+		Assert.assertTrue(isConsumable(53, "House tab"));
+		Assert.assertTrue(isConsumable(54, "Lumbridge teleport"));
+		Assert.assertTrue(isConsumable(55, "Camelot teleport"));
+		Assert.assertTrue(isConsumable(56, "Zul-andra teleport"));
+		Assert.assertTrue(isConsumable(57, "Nardah teleport"));
+		Assert.assertTrue(isConsumable(58, "Digsite teleport"));
+		Assert.assertTrue(isConsumable(59, "Ardeaglais teleport scroll"));
+		Assert.assertTrue(isConsumable(34033, "Ardeaglais teleport"));
+		Assert.assertTrue(isConsumable(70, "Colossal wyrm teleport scroll"));
+		Assert.assertTrue(isConsumable(71, "Chasm teleport scroll"));
+		Assert.assertTrue(isConsumable(72, "Target teleport scroll"));
+		Assert.assertTrue(isConsumable(73, "Lumberyard teleport scroll"));
+		Assert.assertTrue(isConsumable(74, "Watson teleport scroll"));
+		Assert.assertTrue(isConsumable(75, "Nardah teleport scroll"));
+		Assert.assertTrue(isConsumable(76, "Digsite teleport scroll"));
+		Assert.assertTrue(isConsumable(77, "Feldip hills teleport scroll"));
+		Assert.assertTrue(isConsumable(78, "Teleport scroll"));
+		Assert.assertTrue(isConsumable(79, "Icy basalt"));
 	}
 
 	@Test
 	public void isConsumable_teleportExclusions_false()
 	{
-		Assert.assertFalse(ConsumableRegistry.isConsumable(500, "Clue scroll (easy)"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(501, "Clue scroll (master)"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(502, "Eternal teleport crystal"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(503, "Master scroll book"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(504, "Enhanced crystal teleport seed"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(505, "Teleport anchor charm"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(506, "Dexterous prayer scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(507, "Arcane prayer scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(508, "Ancient tablet"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(509, "Teleport anchoring scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(510, "Twisted teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(511, "Trailblazer teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(512, "Trailblazer reloaded home teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(513, "Shattered teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(514, "Speedy teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(515, "Echo home teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(516, "Armageddon teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(517, "Annihilation teleport scroll"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(518, "Teleport focus"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(519, "Teleport trap"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(520, "Teleport card"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(521, "Ancient teleporter"));
+		Assert.assertFalse(isConsumable(500, "Clue scroll (easy)"));
+		Assert.assertFalse(isConsumable(501, "Clue scroll (master)"));
+		Assert.assertFalse(isConsumable(502, "Eternal teleport crystal"));
+		Assert.assertFalse(isConsumable(503, "Master scroll book"));
+		Assert.assertFalse(isConsumable(504, "Enhanced crystal teleport seed"));
+		Assert.assertFalse(isConsumable(505, "Teleport anchor charm"));
+		Assert.assertFalse(isConsumable(506, "Dexterous prayer scroll"));
+		Assert.assertFalse(isConsumable(507, "Arcane prayer scroll"));
+		Assert.assertFalse(isConsumable(508, "Ancient tablet"));
+		Assert.assertFalse(isConsumable(509, "Teleport anchoring scroll"));
+		Assert.assertFalse(isConsumable(510, "Twisted teleport scroll"));
+		Assert.assertFalse(isConsumable(511, "Trailblazer teleport scroll"));
+		Assert.assertFalse(isConsumable(512, "Trailblazer reloaded home teleport scroll"));
+		Assert.assertFalse(isConsumable(513, "Shattered teleport scroll"));
+		Assert.assertFalse(isConsumable(514, "Speedy teleport scroll"));
+		Assert.assertFalse(isConsumable(515, "Echo home teleport scroll"));
+		Assert.assertFalse(isConsumable(516, "Armageddon teleport scroll"));
+		Assert.assertFalse(isConsumable(517, "Annihilation teleport scroll"));
+		Assert.assertFalse(isConsumable(518, "Teleport focus"));
+		Assert.assertFalse(isConsumable(519, "Teleport trap"));
+		Assert.assertFalse(isConsumable(520, "Teleport card"));
+		Assert.assertFalse(isConsumable(521, "Ancient teleporter"));
 	}
 
 	@Test
 	public void isConsumable_resourcesAndEquipment_false()
 	{
-		Assert.assertFalse(ConsumableRegistry.isConsumable(60, "Iron ore"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(61, "Magic logs"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(62, "Rune bar"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(63, "Rune pickaxe"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(64, "Abyssal whip"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(65, "Vial"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(66, "Coins"));
+		Assert.assertFalse(isConsumable(60, "Iron ore"));
+		Assert.assertFalse(isConsumable(61, "Magic logs"));
+		Assert.assertFalse(isConsumable(62, "Rune bar"));
+		Assert.assertFalse(isConsumable(63, "Rune pickaxe"));
+		Assert.assertFalse(isConsumable(64, "Abyssal whip"));
+		Assert.assertFalse(isConsumable(65, "Vial"));
+		Assert.assertFalse(isConsumable(66, "Coins"));
 	}
 
 	@Test
@@ -192,8 +239,8 @@ public class ConsumableRegistryTest
 		Assert.assertNull(ConsumableRegistry.parsePotion("Teleport crystal(4)"));
 		Assert.assertNull(ConsumableRegistry.parsePotion("Pharaoh's sceptre(3)"));
 
-		Assert.assertFalse(ConsumableRegistry.isConsumable(1704, "Amulet of glory(4)"));
-		Assert.assertFalse(ConsumableRegistry.isConsumable(2552, "Ring of dueling(4)"));
+		Assert.assertFalse(isConsumable(1704, "Amulet of glory(4)"));
+		Assert.assertFalse(isConsumable(2552, "Ring of dueling(4)"));
 	}
 
 	@Test
@@ -203,5 +250,19 @@ public class ConsumableRegistryTest
 		Assert.assertTrue(ConsumableRegistry.isFoodPortion("slice of cake", "2/3 cake"));
 		Assert.assertTrue(ConsumableRegistry.isFoodPortion("2/3 chocolate cake", "chocolate cake"));
 		Assert.assertTrue(ConsumableRegistry.isFoodPortion("chocolate slice", "2/3 chocolate cake"));
+	}
+
+	@Test
+	public void isConsumable_durableDrinkable_false()
+	{
+		ItemManager itemManager = mockItemManager(9003, "Waterskin(4)", "Drink", "Drop");
+		Assert.assertFalse(ConsumableRegistry.isConsumable(9003, "Waterskin(4)", itemManager));
+	}
+
+	@Test
+	public void isConsumable_noEatOrDrinkAction_false()
+	{
+		ItemManager itemManager = mockItemManager(9004, "Rune pickaxe", "Wield", "Drop");
+		Assert.assertFalse(ConsumableRegistry.isConsumable(9004, "Rune pickaxe", itemManager));
 	}
 }

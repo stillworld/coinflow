@@ -117,8 +117,11 @@ public class ItemNotingHandler implements ReconciliationHandler
 			}
 		}
 
-		// Reconcile service fee (e.g. 5 gp each charged by Phials or Piles)
-		if (totalConvertedItems > 0 && !rawLosses.isEmpty())
+		// Reconcile service fee (e.g. 5 gp each charged by Phials or Piles).
+		// Only attribute a coin loss as a fee when a noting-service interaction was
+		// recently clicked — otherwise coincidental coin losses in the same tick as a
+		// note swap (or free noting at the Tool Leprechaun) get eaten as fake fees.
+		if (totalConvertedItems > 0 && context.isNotingService() && !rawLosses.isEmpty())
 		{
 			Integer coinsLostKey = null;
 			int coinsLostQty = 0;

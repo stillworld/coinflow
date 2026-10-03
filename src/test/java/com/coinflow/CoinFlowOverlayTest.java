@@ -9,6 +9,7 @@ import java.util.Map;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
+import java.time.Duration;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -135,5 +136,53 @@ public class CoinFlowOverlayTest
 		// When trackSpent is true even with 0 expenses:
 		// 5 children: Title, Net Profit, Spent, GP/Hour, Time
 		Assert.assertEquals(5, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void formatTitle_and_formatTimeRight_idleFormatting()
+	{
+		Assert.assertEquals("Coin Flow (idle)", CoinFlowOverlay.formatTitle(true));
+		Assert.assertEquals("Coin Flow", CoinFlowOverlay.formatTitle(false));
+
+		Duration d = Duration.ofMinutes(5).plusSeconds(30);
+		// Not idle
+		Assert.assertEquals("05:30", CoinFlowOverlay.formatTimeRight(d, false, false));
+		Assert.assertEquals("05:30", CoinFlowOverlay.formatTimeRight(d, false, true));
+		// Idle with includeAfk = false -> paused
+		Assert.assertEquals("05:30 (paused)", CoinFlowOverlay.formatTimeRight(d, true, false));
+		// Idle with includeAfk = true -> idle
+		Assert.assertEquals("05:30 (idle)", CoinFlowOverlay.formatTimeRight(d, true, true));
+	}
+
+	@Test
+	public void render_whenIdle_rendersSuccessfully()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew().tick(0);
+		Assert.assertTrue(session.isIdle());
+
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(false);
+		when(config.includeAfkTime()).thenReturn(false);
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+		Assert.assertEquals(4, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void render_whenIdleAndIncludeAfkTimeTrue_rendersSuccessfully()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew().tick(0);
+		Assert.assertTrue(session.isIdle());
+
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(false);
+		when(config.includeAfkTime()).thenReturn(true);
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+		Assert.assertEquals(4, overlay.getPanelComponent().getChildren().size());
 	}
 }

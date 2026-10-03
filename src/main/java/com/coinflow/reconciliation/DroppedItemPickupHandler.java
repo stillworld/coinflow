@@ -16,11 +16,24 @@ public class DroppedItemPickupHandler implements ReconciliationHandler
 	@Override
 	public void reconcile(ReconciliationContext context)
 	{
-		Map<Integer, Integer> rawGains = context.getRawGains();
-		Map<Integer, Integer> recentlyDroppedOwnedItems = context.getRecentlyDroppedOwnedItems();
-		Map<Integer, Integer> recentlyDroppedItems = context.getRecentlyDroppedItems();
-		ItemManager itemManager = context.getItemManager();
+		applyDropReconciliation(
+			context.getRawGains(),
+			context.getRecentlyDroppedItems(),
+			context.getRecentlyDroppedOwnedItems(),
+			context.getItemManager());
+	}
 
+	/**
+	 * Applies own-drop reconciliation to a gains map in place. Shared with
+	 * non-inventory pickup paths (gem bag, herb sack, seed box, fish barrel,
+	 * log basket) which bypass the handler chain.
+	 */
+	public static void applyDropReconciliation(
+		Map<Integer, Integer> rawGains,
+		Map<Integer, Integer> recentlyDroppedItems,
+		Map<Integer, Integer> recentlyDroppedOwnedItems,
+		ItemManager itemManager)
+	{
 		if (rawGains.isEmpty())
 		{
 			return;

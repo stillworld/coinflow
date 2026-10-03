@@ -91,6 +91,10 @@ public class ReconciliationContext
 	private boolean alchemy = false;
 
 	@Getter
+	@Setter
+	private boolean notingService = false;
+
+	@Getter
 	private final Set<Skill> activeSkillingSkills = new java.util.HashSet<>();
 
 	public void addActiveSkillingSkill(Skill skill)

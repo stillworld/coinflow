@@ -1316,10 +1316,13 @@ public class CoinFlowPanel extends PluginPanel
 		sessionProfitCaption.setText(trackSpent ? "Net Profit" : "Profit");
 		sessionProfitLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.formatNumber(Math.abs(totalProfit)) + " gp");
 		sessionProfitLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);
+		boolean isIdle = session.isIdle();
 		long rate = trackSpent ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
 		sessionRateLabel.setText((rate < 0 ? "-" : "") + QuantityFormatter.formatNumber(Math.abs(rate)) + " gp/hr");
-		sessionRateLabel.setForeground(rate >= 0 ? Color.WHITE : WARN_ORANGE);
-		sessionTimeLabel.setText(formatDuration(session.getTime(includeAfk)));
+		sessionRateLabel.setForeground(!isIdle && rate >= 0 ? Color.WHITE : WARN_ORANGE);
+		String timeStr = formatDuration(session.getTime(includeAfk)) + (isIdle ? (includeAfk ? " (idle)" : " (paused)") : "");
+		sessionTimeLabel.setText(timeStr);
+		sessionTimeLabel.setForeground(isIdle ? WARN_ORANGE : Color.WHITE);
 
 		sessionCollapsedPreviewLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.quantityToStackSize(Math.abs(totalProfit)) + " gp");
 		sessionCollapsedPreviewLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);

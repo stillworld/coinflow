@@ -218,6 +218,44 @@ public final class CoinFlowSession
 	}
 
 	/**
+	 * Returns a new session snapshot with lastTickTime and lastActivityTime updated to now.
+	 * Called upon logging in or hopping worlds to prevent offline time from accumulating or
+	 * corrupting active session duration.
+	 */
+	public CoinFlowSession withResumedState()
+	{
+		Instant now = Instant.now();
+		return new CoinFlowSession(
+			this.trackedItems,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			now,
+			now,
+			this.idle
+		);
+	}
+
+	public CoinFlowSession withLastActivityTime(Instant lastActivityTime)
+	{
+		return new CoinFlowSession(
+			this.trackedItems,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			lastActivityTime,
+			this.lastTickTime,
+			this.idle
+		);
+	}
+
+	/**
 	 * Returns a new session with the given items added to the tracked totals.
 	 * Resets idle state and sets lastActivityTime to now without adding idle time gaps.
 	 *
@@ -349,7 +387,7 @@ public final class CoinFlowSession
 			this.activeTime,
 			this.totalInGameTime,
 			now,
-			now,
+			this.lastTickTime,
 			false
 		);
 	}
@@ -378,7 +416,35 @@ public final class CoinFlowSession
 		}
 
 		Duration newTotalInGameTime = this.totalInGameTime.plus(tickDelta);
-		Duration newActiveTime = nowIdle ? this.activeTime : this.activeTime.plus(tickDelta);
+		Duration newActiveTime;
+		if (nowIdle)
+		{
+			if (!this.idle)
+			{
+				// Transitioning from active to idle: retroactively remove the inactivity window
+				// that accumulated while waiting for the idle timeout threshold to trigger.
+				// Bounded by at most idleTimeoutMinutes so offline time or long gaps never wipe out active time.
+				Duration maxCountdown = Duration.ofMinutes(Math.max(0, idleTimeoutMinutes));
+				Duration inactiveDuration = Duration.between(this.lastActivityTime, now);
+				Duration rollback = inactiveDuration.compareTo(maxCountdown) > 0 ? maxCountdown : inactiveDuration;
+				if (this.activeTime.compareTo(rollback) > 0)
+				{
+					newActiveTime = this.activeTime.minus(rollback);
+				}
+				else
+				{
+					newActiveTime = Duration.ZERO;
+				}
+			}
+			else
+			{
+				newActiveTime = this.activeTime;
+			}
+		}
+		else
+		{
+			newActiveTime = this.activeTime.plus(tickDelta);
+		}
 
 		return new CoinFlowSession(
 			this.trackedItems,
@@ -475,6 +541,15 @@ public final class CoinFlowSession
 	public boolean isIdle()
 	{
 		return idle;
+	}
+
+	/**
+	 * Wall-clock time of the last processed game tick. Only advanced by tick();
+	 * package-private for tests and session telemetry logging.
+	 */
+	Instant getLastTickTime()
+	{
+		return lastTickTime;
 	}
 
 	/**

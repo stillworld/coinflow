@@ -34,11 +34,13 @@ import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.EquipmentInventorySlot;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.GraphicChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.ItemDespawned;
 import net.runelite.api.events.MenuOptionClicked;
@@ -170,6 +172,12 @@ public class CoinFlowPlugin extends Plugin
 	final Map<Integer, Integer> pendingWornAmmoExpenses = new HashMap<>();
 
 	/**
+	 * Tracks resources consumed inside charged weapons (runes, scales, shards)
+	 * via CHARGES_*_QUANTITY varbits, which never produce an inventory diff.
+	 */
+	final WeaponChargeTracker weaponChargeTracker = new WeaponChargeTracker();
+
+	/**
 	 * Number of game ticks remaining to suppress diffing for in-flight items
 	 * arriving immediately upon or after interface closure (e.g. bank withdrawals).
 	 */
@@ -249,6 +257,13 @@ public class CoinFlowPlugin extends Plugin
 	final Map<Integer, Integer> droppedItemTicks = new HashMap<>();
 
 	/**
+	 * Game tick when each gear-swap item was last seen in a WORN diff, used to
+	 * expire stale unequipped/equipped records that never found their inventory
+	 * counterpart (e.g. ammo picked up directly into the ammo slot).
+	 */
+	final Map<Integer, Integer> gearSwapItemTicks = new HashMap<>();
+
+	/**
 	 * Skilling action sink detection across ticks.
 	 */
 	final Map<Skill, Integer> lastSkillXpTicks = new HashMap<>();
@@ -264,6 +279,7 @@ public class CoinFlowPlugin extends Plugin
 	int lastLootingBagDepositTick = -100;
 	int lastLootingBagDepositItemId = -1;
 	String lastLootingBagDepositItemName = null;
+	int lastNotingServiceTick = -100;
 
 	private static class TakeClick
 	{
@@ -300,6 +316,12 @@ public class CoinFlowPlugin extends Plugin
 	final List<LootPickup> pendingLogBasketPickups = new ArrayList<>();
 	final Map<Integer, Integer> invItemsGainedThisTick = new HashMap<>();
 	final Map<Integer, Map<Integer, Integer>> previousPvpKeyContainers = new HashMap<>();
+
+	/**
+	 * Tracked varbits that threw on getVarbitValue (not varp-backed in this client
+	 * build); logged once per ID to avoid spam.
+	 */
+	final Set<Integer> invalidVarbitIds = new HashSet<>();
 	int lastSkillingGemId = -1;
 	int lastSkillingGemTick = -100;
 	private WorldPoint lastPlayerLocation;
@@ -407,6 +429,10 @@ public class CoinFlowPlugin extends Plugin
 
 		if (state == GameState.LOGGED_IN)
 		{
+			if (session != null)
+			{
+				session = session.withResumedState();
+			}
 			if (interfaceTracker.isNeedsRebaseline() && client != null && clientThread != null)
 			{
 				clientThread.invokeLater(() ->
@@ -440,8 +466,7 @@ public class CoinFlowPlugin extends Plugin
 	{
 		int containerId = event.getContainerId();
 
-		if (containerId == InventoryID.INV || containerId == InventoryID.WORN
-			|| containerId == InventoryID.DIZANAS_QUIVER_AMMO
+		if (containerId == InventoryID.INV
 			|| containerId == net.runelite.api.gameval.InventoryID.LOOTING_BAG)
 		{
 			recordPlayerActivity();
@@ -463,8 +488,10 @@ public class CoinFlowPlugin extends Plugin
 			{
 				previousEquipmentSnapshot = currentEquip;
 				pendingWornAmmoExpenses.clear();
+				weaponChargeTracker.reset();
 				recentlyUnequippedItems.clear();
 				recentlyEquippedItems.clear();
+				gearSwapItemTicks.clear();
 				return;
 			}
 
@@ -553,12 +580,14 @@ public class CoinFlowPlugin extends Plugin
 							pendingWornAmmoExpenses.merge(canonicalId, effectiveQty, Integer::sum);
 						}
 						recentlyUnequippedItems.merge(entry.getKey(), effectiveQty, Integer::sum);
+						gearSwapItemTicks.put(entry.getKey(), client != null ? client.getTickCount() : 0);
 					}
 				}
 
 				for (Map.Entry<Integer, Integer> entry : addedToEquip.entrySet())
 				{
 					recentlyEquippedItems.merge(entry.getKey(), entry.getValue(), Integer::sum);
+					gearSwapItemTicks.put(entry.getKey(), client != null ? client.getTickCount() : 0);
 				}
 			}
 			previousEquipmentSnapshot = currentEquip;
@@ -767,7 +796,12 @@ public class CoinFlowPlugin extends Plugin
 						? itemManager.getItemComposition(canonicalLostId).getName().toLowerCase(Locale.ROOT)
 						: "";
 
-					boolean isDepositMatch = lootingBagInterfaceOpen;
+					// While the bag interface is open, only non-consumables are treated as
+					// deposits — eating/drinking while "Check"-ing the bag must still be
+					// expensed. Consumable deposits still match via the Store/Deposit
+					// click intent below, which captures the item id/name.
+					boolean isDepositMatch = lootingBagInterfaceOpen
+						&& !ConsumableRegistry.isConsumable(canonicalLostId, lostName, itemManager);
 					if (!isDepositMatch && recentDepositIntent)
 					{
 						if (lastLootingBagDepositItemId > 0)
@@ -888,6 +922,8 @@ public class CoinFlowPlugin extends Plugin
 				{
 					context.setAlchemy(true);
 				}
+
+				context.setNotingService(currentTick - lastNotingServiceTick <= 5);
 			}
 
 			reconciliationEngine.reconcile(context);
@@ -996,6 +1032,29 @@ public class CoinFlowPlugin extends Plugin
 				processInventoryChanges(invContainer);
 			}
 		}
+
+		if (varbitId >= 0 && WeaponChargeTracker.isTrackedVarbit(varbitId))
+		{
+			int value;
+			try
+			{
+				value = client.getVarbitValue(varbitId);
+			}
+			catch (IndexOutOfBoundsException e)
+			{
+				// Some tracked CHARGES_* varbits are not varp-backed / not present in this
+				// client build; getVarbitValue throws for them. Log once per varbit ID.
+				if (invalidVarbitIds.add(varbitId))
+				{
+					log.debug("Ignoring untracked varbit {} (not varp-backed)", varbitId);
+				}
+				return;
+			}
+			boolean trackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
+			weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
+				client.getTickCount());
+		}
 	}
 
 	@Subscribe
@@ -1012,8 +1071,10 @@ public class CoinFlowPlugin extends Plugin
 		if (interfaceTracker.isTrackingSuppressed())
 		{
 			pendingWornAmmoExpenses.clear();
+			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();
+			gearSwapItemTicks.clear();
 		}
 
 		if (wasSuppressed && !interfaceTracker.isTrackingSuppressed() && client != null && snapshotInitialized)
@@ -1029,8 +1090,10 @@ public class CoinFlowPlugin extends Plugin
 				previousEquipmentSnapshot = takeSnapshot(worn);
 			}
 			pendingWornAmmoExpenses.clear();
+			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();
+			gearSwapItemTicks.clear();
 			rebaselineGraceTicks = 2;
 		}
 	}
@@ -1054,8 +1117,10 @@ public class CoinFlowPlugin extends Plugin
 				previousEquipmentSnapshot = takeSnapshot(worn);
 			}
 			pendingWornAmmoExpenses.clear();
+			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();
+			gearSwapItemTicks.clear();
 			rebaselineGraceTicks = 2;
 		}
 	}
@@ -1151,12 +1216,18 @@ public class CoinFlowPlugin extends Plugin
 			{
 				lastTinderboxActionTick = tick;
 			}
+			else if (lowerTarget.contains("leprechaun") || lowerTarget.contains("phials")
+				|| lowerTarget.contains("piles"))
+			{
+				lastNotingServiceTick = tick;
+			}
 			else if (lowerTarget.contains("->"))
 			{
 				String[] parts = lowerTarget.split("->");
 				String dest = parts.length > 1 ? parts[1].trim() : "";
 				if (isContainerOrChargedItemTarget(dest) || (isContainerOrChargedItemTarget(parts[0].trim()) && (dest.contains("bank") || dest.contains("deposit"))))
 				{
+					weaponChargeTracker.recordUseSource(parts[0]);
 					interfaceTracker.setNeedsRebaseline(true);
 					rebaselineGraceTicks = 3;
 					log.debug("Container/charged item Use action clicked ('{}'), scheduling rebaseline", target);
@@ -1166,11 +1237,16 @@ public class CoinFlowPlugin extends Plugin
 		else if ("Fill".equalsIgnoreCase(option) || "Empty".equalsIgnoreCase(option)
 			|| "Empty basket".equalsIgnoreCase(option)
 			|| "Open".equalsIgnoreCase(option) || "Close".equalsIgnoreCase(option)
-			|| "Charge".equalsIgnoreCase(option) || "Uncharge".equalsIgnoreCase(option))
+			|| "Charge".equalsIgnoreCase(option) || "Uncharge".equalsIgnoreCase(option)
+			|| "Unload".equalsIgnoreCase(option))
 		{
 			String lowerTarget = target.toLowerCase(Locale.ROOT);
 			if (isContainerOrChargedItemTarget(lowerTarget))
 			{
+				if ("Unload".equalsIgnoreCase(option) && lowerTarget.contains("blowpipe"))
+				{
+					weaponChargeTracker.clearLoadedDarts();
+				}
 				interfaceTracker.setNeedsRebaseline(true);
 				rebaselineGraceTicks = 3;
 				log.debug("Container/charged item action clicked ('{}' on '{}'), scheduling rebaseline", option, target);
@@ -1195,6 +1271,10 @@ public class CoinFlowPlugin extends Plugin
 					log.debug("Looting bag deposit intent via Store/Deposit: {} on {} (id {})", option, target, event.getItemId());
 				}
 			}
+		}
+		else if ("note".equalsIgnoreCase(option) || "un-note".equalsIgnoreCase(option))
+		{
+			lastNotingServiceTick = tick;
 		}
 		else if (lastLootingBagDepositTick > 0 && tick - lastLootingBagDepositTick <= 15
 			&& ("one".equalsIgnoreCase(option) || "five".equalsIgnoreCase(option) || "all".equalsIgnoreCase(option) || "x".equalsIgnoreCase(option)))
@@ -1339,8 +1419,11 @@ public class CoinFlowPlugin extends Plugin
 	{
 		if (client != null && event.getActor() == client.getLocalPlayer())
 		{
-			recordPlayerActivity();
 			int anim = client.getLocalPlayer().getAnimation();
+			if (anim != -1 && !isDefensiveAnimation(anim))
+			{
+				recordPlayerActivity();
+			}
 			if (isFiremakingAnimation(anim))
 			{
 				lastFiremakingAnimTick = client.getTickCount();
@@ -1353,6 +1436,17 @@ public class CoinFlowPlugin extends Plugin
 			{
 				lastAlchAnimTick = client.getTickCount();
 			}
+			weaponChargeTracker.onAttackAnimation(anim, equippedWeaponName(), client.getTickCount());
+		}
+	}
+
+	@Subscribe
+	public void onGraphicChanged(GraphicChanged event)
+	{
+		if (client != null && event.getActor() != null && event.getActor() == client.getLocalPlayer())
+		{
+			weaponChargeTracker.onAttackGraphic(event.getActor().getGraphic(), equippedWeaponName(),
+				client.getTickCount());
 		}
 	}
 
@@ -2034,7 +2128,29 @@ public class CoinFlowPlugin extends Plugin
 			|| lowerTarget.contains("tackle box")
 			|| lowerTarget.contains("plank sack")
 			|| lowerTarget.contains("bottomless compost bucket")
-			|| lowerTarget.contains("coal bag");
+			|| lowerTarget.contains("coal bag")
+			// Essence pouches (small/medium/large/giant/colossal): Fill/Empty moves
+			// essence between inventory and pouch without consuming it.
+			|| lowerTarget.endsWith(" pouch") || lowerTarget.equals("pouch")
+			// Charged weapons: Charge/Uncharge/Unload actions return stored resources to
+			// inventory, so the diff must be rebaselined rather than treated as profit.
+			|| lowerTarget.contains("toxic blowpipe")
+			|| lowerTarget.contains("trident of the")
+			|| lowerTarget.contains("sanguinesti")
+			|| lowerTarget.contains("tumeken's shadow") || lowerTarget.contains("tumekens shadow")
+			|| lowerTarget.contains("craw's bow") || lowerTarget.contains("webweaver bow")
+			|| lowerTarget.contains("viggora's chainmace") || lowerTarget.contains("thammaron's sceptre")
+			|| lowerTarget.contains("accursed sceptre") || lowerTarget.contains("ursine chainmace")
+			|| lowerTarget.contains("serpentine helm") || lowerTarget.contains("toxic staff")
+			|| lowerTarget.contains("bow of faerdhinen") || lowerTarget.contains("blade of saeldor")
+			|| lowerTarget.contains("crystal helm") || lowerTarget.contains("crystal body")
+			|| lowerTarget.contains("crystal legs")
+			|| lowerTarget.contains("venator bow") || lowerTarget.contains("tonalztics")
+			|| lowerTarget.contains("tome of fire") || lowerTarget.contains("tome of water")
+			|| lowerTarget.contains("tome of earth")
+			|| lowerTarget.contains("ring of suffering") || lowerTarget.contains("xeric's talisman")
+			|| lowerTarget.contains("bryophyta's staff") || lowerTarget.contains("arclight")
+			|| lowerTarget.contains("amulet of blood fury") || lowerTarget.contains("bracelet of ethereum");
 	}
 
 	public static boolean isFarmingPatchAction(String lowerTarget)
@@ -2103,6 +2219,16 @@ public class CoinFlowPlugin extends Plugin
 			|| anim == AnimationID.HUMAN_CASTLOWLVLALCHEMY
 			|| anim == AnimationID.HUMAN_CASTHIGHLVLALCHEMY_FIRE
 			|| anim == AnimationID.HUMAN_CASTLOWLVLALCHEMY_FIRE;
+	}
+
+	public static boolean isDefensiveAnimation(int anim)
+	{
+		return anim == AnimationID.HUMAN_UNARMEDBLOCK
+			|| anim == AnimationID.HUMAN_BLUNT_BLOCK
+			|| anim == AnimationID.HUMAN_BLUNT_DEF
+			|| anim == AnimationID.HUMAN_SWORD_DEF
+			|| anim == AnimationID.HUMAN_STAFFORB_BLOCK
+			|| anim == AnimationID.HUMAN_SHIELD_DEFENCE;
 	}
 
 	@Subscribe
@@ -2260,14 +2386,103 @@ public class CoinFlowPlugin extends Plugin
 			}
 		}
 
+		// Finalize pending charge-based supply costs (runes/scales/shards stored inside weapons)
+		boolean chargeTrackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+			&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
+		if (client != null)
+		{
+			for (int varbitId : WeaponChargeTracker.trackedVarbitIds())
+			{
+				if (invalidVarbitIds.contains(varbitId))
+				{
+					continue;
+				}
+				int value;
+				try
+				{
+					value = client.getVarbitValue(varbitId);
+				}
+				catch (IndexOutOfBoundsException e)
+				{
+					// Some tracked CHARGES_* varbits are not varp-backed / not present in this
+					// client build; getVarbitValue throws for them. Skip them from now on.
+					if (invalidVarbitIds.add(varbitId))
+					{
+						log.debug("Ignoring untracked varbit {} (not varp-backed)", varbitId);
+					}
+					continue;
+				}
+				weaponChargeTracker.onVarbitChanged(varbitId, value,
+					chargeTrackingAllowed, client.getTickCount());
+			}
+		}
+		weaponChargeTracker.setDartRecoveryRate(equippedAvasRecoveryRate());
+		// When tracking is disallowed mid-window (rebaseline grace), keep the pending
+		// spend so attack-triggered costs aren't silently dropped; when the feature is
+		// disabled, drain anyway to discard accumulation.
+		Map<Integer, Integer> consumedChargeResources = chargeTrackingAllowed || !config.trackWeaponCharges()
+			? weaponChargeTracker.drain()
+			: Collections.emptyMap();
+		if (!consumedChargeResources.isEmpty() && config.trackWeaponCharges())
+		{
+			Map<Integer, CoinFlowSession.TrackedItem> chargeExpenses = new HashMap<>();
+			for (Map.Entry<Integer, Integer> entry : consumedChargeResources.entrySet())
+			{
+				int itemId = entry.getKey();
+				int quantity = entry.getValue();
+				String itemName = getItemName(itemId);
+				long price = itemId == ItemID.COINS ? 1 : (itemManager != null ? itemManager.getItemPrice(itemId) : 0);
+				if (price <= 0 && itemManager != null)
+				{
+					ItemComposition comp = itemManager.getItemComposition(itemId);
+					if (comp != null)
+					{
+						price = comp.getHaPrice();
+					}
+				}
+				chargeExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				log.debug("Consumed weapon charge resource on tick: {} x{} @ {} gp", itemName, quantity, price);
+			}
+			processGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), chargeExpenses);
+		}
+
 		if (client != null)
 		{
 			int currentTick = client.getTickCount();
 			recentTakeClicks.removeIf(click -> currentTick - click.tick > 5);
+
+			// Evict gear-swap records unmatched for >10 ticks (~6s). WORN<->INV
+			// dispatch pairs resolve within 1-2 ticks, so anything older is stale
+			// (e.g. ammo picked up directly into the ammo slot) and must not cancel
+			// future legitimate inventory diffs.
+			if (!gearSwapItemTicks.isEmpty())
+			{
+				gearSwapItemTicks.entrySet().removeIf(entry -> {
+					if (currentTick - entry.getValue() > 10)
+					{
+						recentlyUnequippedItems.remove(entry.getKey());
+						recentlyEquippedItems.remove(entry.getKey());
+						return true;
+					}
+					return false;
+				});
+			}
 		}
 
 		// Update idle state and time tracking on each tick
+		CoinFlowSession prevSession = session;
 		session = session.tick(config.idleTimeoutMinutes(), isPlayerActive());
+
+		// Periodic session telemetry (~every 30s) for debugging GP/hr and timer behavior.
+		// tickDelta should hover ~600ms; sustained near-0 values indicate clock corruption.
+		if (log.isDebugEnabled() && client != null && client.getTickCount() % 50 == 0)
+		{
+			log.debug("Session: tickDelta={}ms active={}s total={}s gross={} spent={} gp/hr={} idle={}",
+				session.getTotalInGameTime().minus(prevSession.getTotalInGameTime()).toMillis(),
+				session.getActiveTime().getSeconds(), session.getTotalInGameTime().getSeconds(),
+				session.getGrossProfit(), session.getTotalExpenses(),
+				session.getGpPerHour(config.includeAfkTime()), session.isIdle());
+		}
 
 		// Decrement rebaseline grace window after interface closures
 		if (rebaselineGraceTicks > 0)
@@ -2346,18 +2561,17 @@ public class CoinFlowPlugin extends Plugin
 			lastPlayerLocation = currentLoc;
 		}
 
-		// 2. Walking/running animation pose (differs from standing idle pose)
-		boolean movingPose = localPlayer.getPoseAnimation() != localPlayer.getIdlePoseAnimation();
-
-		// 3. Action animation (woodcutting, mining, combat, casting, etc.)
+		// 2. Action animation (woodcutting, mining, combat, casting, etc.)
+		// NOTE: pose animation is deliberately not used — it stays in combat stance
+		// for the whole fight, which would prevent AFK combat from ever going idle.
 		boolean animating = localPlayer.getAnimation() != -1;
 
-		// 4. Recent user-triggered action (menu click, item container change, XP drop within last 2 ticks)
+		// 3. Recent user-triggered action (menu click, item container change, XP drop within last 2 ticks)
 		int currentTick = client.getTickCount();
 		int diff = currentTick - lastPlayerActivityTick;
 		boolean recentAction = diff >= 0 && diff <= 2;
 
-		// 5. Direct input: mouse moved or key pressed recently (< 50 client cycles / ~1 sec)
+		// 4. Direct input: mouse moved or key pressed recently (< 50 client cycles / ~1 sec)
 		boolean activeInput = false;
 		try
 		{
@@ -2367,7 +2581,7 @@ public class CoinFlowPlugin extends Plugin
 		{
 		}
 
-		return moved || movingPose || animating || recentAction || activeInput;
+		return moved || animating || recentAction || activeInput;
 	}
 
 	@Subscribe
@@ -2407,7 +2621,7 @@ public class CoinFlowPlugin extends Plugin
 					String sanitized = val.replaceAll(CoinFlowInputFilter.DIGITS_ONLY, "");
 					if (!sanitized.equals(val))
 					{
-						int safeVal = 5;
+						int safeVal = 2;
 						if (!sanitized.isEmpty())
 						{
 							try
@@ -2416,7 +2630,7 @@ public class CoinFlowPlugin extends Plugin
 							}
 							catch (NumberFormatException ignored)
 							{
-								safeVal = 5;
+								safeVal = 2;
 							}
 						}
 						configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "idleTimeoutMinutes", safeVal);
@@ -2537,6 +2751,7 @@ public class CoinFlowPlugin extends Plugin
 		pendingWornAmmoExpenses.clear();
 		recentlyUnequippedItems.clear();
 		recentlyEquippedItems.clear();
+		gearSwapItemTicks.clear();
 
 		for (Skill skill : Skill.values())
 		{
@@ -2549,6 +2764,71 @@ public class CoinFlowPlugin extends Plugin
 			{
 			}
 		}
+	}
+
+	/**
+	 * Name of the item currently in the weapon slot, or null.
+	 */
+	String equippedWeaponName()
+	{
+		if (client == null)
+		{
+			return null;
+		}
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn == null)
+		{
+			return null;
+		}
+		Item weapon = worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+		if (weapon == null)
+		{
+			return null;
+		}
+		int weaponId = itemManager != null ? itemManager.canonicalize(weapon.getId()) : weapon.getId();
+		return getItemName(weaponId);
+	}
+
+	/**
+	 * Fraction of consumed blowpipe darts returned by the equipped Ava's device,
+	 * or 0 when none is worn.
+	 */
+	double equippedAvasRecoveryRate()
+	{
+		if (client == null)
+		{
+			return 0.0;
+		}
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn == null)
+		{
+			return 0.0;
+		}
+		Item cape = worn.getItem(EquipmentInventorySlot.CAPE.getSlotIdx());
+		if (cape == null)
+		{
+			return 0.0;
+		}
+		int capeId = itemManager != null ? itemManager.canonicalize(cape.getId()) : cape.getId();
+		String name = getItemName(capeId);
+		if (name == null)
+		{
+			return 0.0;
+		}
+		String lower = name.toLowerCase(Locale.ROOT);
+		if (lower.contains("assembler") || lower.contains("dizana's quiver"))
+		{
+			return 0.80;
+		}
+		if (lower.contains("accumulator"))
+		{
+			return 0.72;
+		}
+		if (lower.contains("attractor"))
+		{
+			return 0.60;
+		}
+		return 0.0;
 	}
 
 	/**
@@ -2799,6 +3079,11 @@ public class CoinFlowPlugin extends Plugin
 			}
 		}
 
+		// Re-picking up the player's own dropped items into an open bag/box/sack
+		// must not count as fresh profit — this path bypasses the handler chain.
+		com.coinflow.reconciliation.DroppedItemPickupHandler.applyDropReconciliation(
+			containerGains, recentlyDroppedItems, recentlyDroppedOwnedItems, itemManager);
+
 		if (!containerGains.isEmpty())
 		{
 			processGains(containerGains);
@@ -3026,6 +3311,7 @@ public class CoinFlowPlugin extends Plugin
 	{
 		recentlyUnequippedItems.clear();
 		recentlyEquippedItems.clear();
+		gearSwapItemTicks.clear();
 		recentlyDroppedItems.clear();
 		recentlyDroppedOwnedItems.clear();
 		droppedItemTicks.clear();
@@ -3040,6 +3326,7 @@ public class CoinFlowPlugin extends Plugin
 		matchedUnequipsThisTick.clear();
 		previousPvpKeyContainers.clear();
 		pendingWornAmmoExpenses.clear();
+		weaponChargeTracker.reset();
 		lastSkillingGemId = -1;
 		lastSkillingGemTick = -100;
 		if (getSnapshotService() != null)
@@ -3060,6 +3347,7 @@ public class CoinFlowPlugin extends Plugin
 		lastLootingBagDepositTick = -100;
 		lastLootingBagDepositItemId = -1;
 		lastLootingBagDepositItemName = null;
+		lastNotingServiceTick = -100;
 		rebaselineGraceTicks = 0;
 		lastPlayerLocation = null;
 		lastPlayerActivityTick = -100;
@@ -3074,10 +3362,21 @@ public class CoinFlowPlugin extends Plugin
 	 */
 	public void resetSession()
 	{
+		if (log.isDebugEnabled() && session != null)
+		{
+			log.debug("Session reset: active={}s total={}s gross={} spent={} idle={}",
+				session.getActiveTime().getSeconds(), session.getTotalInGameTime().getSeconds(),
+				session.getGrossProfit(), session.getTotalExpenses(), session.isIdle());
+		}
 		session = CoinFlowSession.createNew();
 		goalCompletedNotified = false;
 		lootingBagInitialized = false;
 		resetTransientTrackingState();
+		// Invalidate the baseline immediately: any inventory event before the deferred
+		// takeBaseline() runs must rebaseline rather than diff against the stale pre-reset snapshot.
+		snapshotInitialized = false;
+		previousInventorySnapshot = null;
+		previousEquipmentSnapshot = null;
 		if (client != null && client.getGameState() == GameState.LOGGED_IN)
 		{
 			if (clientThread != null)

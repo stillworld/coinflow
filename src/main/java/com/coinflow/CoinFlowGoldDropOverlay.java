@@ -163,7 +163,8 @@ public class CoinFlowGoldDropOverlay extends Overlay
 
 				try
 				{
-					BufferedImage icon = itemManager != null ? itemManager.getImage(ItemID.COINS_10000) : null;
+					int iconId = drop.itemId > 0 ? drop.itemId : ItemID.COINS_10000;
+					BufferedImage icon = itemManager != null ? itemManager.getImage(iconId) : null;
 					if (icon == null && itemManager != null)
 					{
 						icon = itemManager.getImage(ItemID.COINS);

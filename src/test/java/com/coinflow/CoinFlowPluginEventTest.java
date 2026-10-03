@@ -1190,13 +1190,14 @@ public class CoinFlowPluginEventTest
 	/**
 	 * Stubs ItemManager to make the given item trackable and priced.
 	 */
-	private void stubTrackableItem(int itemId, String name, long price)
+	private void stubTrackableItem(int itemId, String name, long price, String... actions)
 	{
 		when(itemManager.canonicalize(itemId)).thenReturn(itemId);
 		when(itemManager.getItemPrice(itemId)).thenReturn(price);
 		ItemComposition comp = org.mockito.Mockito.mock(ItemComposition.class);
 		when(comp.getName()).thenReturn(name);
 		when(comp.isTradeable()).thenReturn(true);
+		when(comp.getInventoryActions()).thenReturn(actions);
 		when(itemManager.getItemComposition(itemId)).thenReturn(comp);
 	}
 
@@ -1280,13 +1281,14 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(50_000, plugin.getSession().getTrackedItems().get(coinsId).getQuantity());
 	}
 
-	private void stubAlchableItem(int itemId, String name, long gePrice, int haPrice)
+	private void stubAlchableItem(int itemId, String name, long gePrice, int haPrice, String... actions)
 	{
 		when(itemManager.canonicalize(itemId)).thenReturn(itemId);
 		when(itemManager.getItemPrice(itemId)).thenReturn(gePrice);
 		ItemComposition comp = org.mockito.Mockito.mock(ItemComposition.class);
 		when(comp.getName()).thenReturn(name);
 		when(comp.getHaPrice()).thenReturn(haPrice);
+		when(comp.getInventoryActions()).thenReturn(actions);
 		when(itemManager.getItemComposition(itemId)).thenReturn(comp);
 	}
 
@@ -2744,7 +2746,7 @@ public class CoinFlowPluginEventTest
 		int sharkId = 385;
 		int coinsId = net.runelite.api.gameval.ItemID.COINS;
 
-		stubAlchableItem(sharkId, "Shark", 1_000L, 630);
+		stubAlchableItem(sharkId, "Shark", 1_000L, 630, "Eat");
 
 		// Baseline: player has 1 Shark
 		plugin.onItemContainerChanged(new ItemContainerChanged(
@@ -4015,6 +4017,79 @@ public class CoinFlowPluginEventTest
 
 		// Emptying bag must NOT count as new profit!
 		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void colossalPouch_fillAndEmpty_netZeroExpenseAndProfit()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int pouchId = ItemID.RCU_POUCH_COLOSSAL;
+		int essenceId = ItemID.BLANKRUNE_HIGH;
+		stubTrackableItem(pouchId, "Colossal pouch", 0L);
+		stubTrackableItem(essenceId, "Pure essence", 100L);
+
+		// Start: pouch + 40 pure essence in inventory
+		ItemContainer inv1 = mockContainer(InventoryID.INV, pouchId, 1, essenceId, 40);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+		Assert.assertTrue(plugin.snapshotInitialized);
+
+		// Player clicks "Fill" on "Colossal pouch" - essence moves into pouch
+		net.runelite.api.MenuEntry fillEntry = mock(net.runelite.api.MenuEntry.class);
+		when(fillEntry.getOption()).thenReturn("Fill");
+		when(fillEntry.getTarget()).thenReturn("<col=ff9040>Colossal pouch</col>");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(fillEntry));
+
+		ItemContainer inv2 = mockContainer(InventoryID.INV, pouchId, 1, essenceId, 13);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		// Filling is storage, not supply consumption
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+
+		// Player clicks "Empty" on "Colossal pouch" - essence returns to inventory
+		net.runelite.api.MenuEntry emptyEntry = mock(net.runelite.api.MenuEntry.class);
+		when(emptyEntry.getOption()).thenReturn("Empty");
+		when(emptyEntry.getTarget()).thenReturn("<col=ff9040>Colossal pouch</col>");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(emptyEntry));
+
+		ItemContainer inv3 = mockContainer(InventoryID.INV, pouchId, 1, essenceId, 40);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv3);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv3));
+
+		// Emptying must NOT count as profit
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void colossalPouch_useEssenceOnPouch_netZeroExpenseAndProfit()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int pouchId = ItemID.RCU_POUCH_COLOSSAL;
+		int essenceId = ItemID.BLANKRUNE_HIGH;
+		stubTrackableItem(pouchId, "Colossal pouch", 0L);
+		stubTrackableItem(essenceId, "Pure essence", 100L);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, pouchId, 1, essenceId, 20);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Player clicks "Use" Pure essence -> Colossal pouch
+		net.runelite.api.MenuEntry useEntry = mock(net.runelite.api.MenuEntry.class);
+		when(useEntry.getOption()).thenReturn("Use");
+		when(useEntry.getTarget()).thenReturn("Use Pure essence -> <col=ff9040>Colossal pouch</col>");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(useEntry));
+
+		ItemContainer inv2 = mockContainer(InventoryID.INV, pouchId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
 		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
 	}
 
@@ -5303,6 +5378,12 @@ public class CoinFlowPluginEventTest
 
 		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
 
+		// Player clicks "Use Teak plank -> Phials" (noting-service intent required for fee attribution)
+		net.runelite.api.MenuEntry useOnPhials = mock(net.runelite.api.MenuEntry.class);
+		when(useOnPhials.getOption()).thenReturn("Use");
+		when(useOnPhials.getTarget()).thenReturn("<col=ff9040>Teak plank</col> -> <col=ffff00>Phials</col>");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(useOnPhials));
+
 		// Phials unnotes 27 planks: 27 noted planks leave, 135 coins leave, 27 unnoted planks enter
 		ItemContainer inv1 = mockContainer(InventoryID.INV, notedTeak, 73, unnotedTeak, 27, coinsId, 10_000 - 135);
 		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
@@ -5805,6 +5886,58 @@ public class CoinFlowPluginEventTest
 		));
 
 		Assert.assertFalse("Inventory container change should immediately clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onItemContainerChanged_wornContainer_doesNotClearIdleState()
+	{
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		// Equipment container change without inventory change (e.g. passive degradation)
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN,
+			mockContainer(InventoryID.WORN, 999999, 1)
+		));
+
+		Assert.assertTrue("Passive worn container change should not clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onAnimationChanged_animNegativeOne_doesNotClearIdleState()
+	{
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		when(player.getAnimation()).thenReturn(-1);
+
+		net.runelite.api.events.AnimationChanged event = new net.runelite.api.events.AnimationChanged();
+		event.setActor(player);
+		plugin.onAnimationChanged(event);
+
+		Assert.assertTrue("Transitioning to idle animation (-1) should not clear idle status", plugin.session.isIdle());
+	}
+
+	@Test
+	public void onAnimationChanged_defensiveAnimation_doesNotClearIdleState()
+	{
+		when(config.idleTimeoutMinutes()).thenReturn(0);
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		when(player.getAnimation()).thenReturn(424); // unarmed defend
+
+		net.runelite.api.events.AnimationChanged event = new net.runelite.api.events.AnimationChanged();
+		event.setActor(player);
+		plugin.onAnimationChanged(event);
+
+		Assert.assertTrue("Defensive combat animation should not clear idle status", plugin.session.isIdle());
 	}
 
 	@Test
