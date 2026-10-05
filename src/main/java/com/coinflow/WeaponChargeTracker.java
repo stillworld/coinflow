@@ -145,7 +145,7 @@ final class WeaponChargeTracker
 			Collections.singleton(SpotanimID.TUMEKENS_SHADOW_CASTING), Collections.emptySet(), false,
 			Collections.singleton(VarbitID.CHARGES_TUMEKENS_SHADOW_QUANTITY),
 			new ChargeCost(ItemID.CHAOSRUNE, 5, 1),
-			new ChargeCost(ItemID.SOULRUNE, 20, 1)));
+			new ChargeCost(ItemID.SOULRUNE, 2, 1)));
 		ATTACK_PROFILES.add(new AttackProfile("warped sceptre",
 			Collections.singleton(SpotanimID.VFX_WARPED_SCEPTRE_CAST), Collections.emptySet(), false,
 			Collections.singleton(VarbitID.CHARGES_WARPED_SCEPTRE_QUANTITY),
@@ -221,7 +221,7 @@ final class WeaponChargeTracker
 		CONFIGS.put(VarbitID.CHARGES_TUMEKENS_SHADOW_QUANTITY,
 			new WeaponConfig("tumeken's shadow",
 				new ChargeCost(ItemID.CHAOSRUNE, 5, 1),
-				new ChargeCost(ItemID.SOULRUNE, 20, 1)));
+				new ChargeCost(ItemID.SOULRUNE, 2, 1)));
 		CONFIGS.put(VarbitID.CHARGES_WARPED_SCEPTRE_QUANTITY,
 			new WeaponConfig("warped sceptre",
 				new ChargeCost(ItemID.CHAOSRUNE, 2, 1),

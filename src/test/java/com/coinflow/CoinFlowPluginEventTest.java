@@ -51,8 +51,10 @@ import org.mockito.junit.MockitoJUnitRunner;
 
 import static com.coinflow.TestHelpers.gains;
 import static com.coinflow.TestHelpers.snapshot;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -131,6 +133,8 @@ public class CoinFlowPluginEventTest
 		when(config.goldDropMinThreshold()).thenReturn(0);
 		when(client.getMouseIdleTicks()).thenReturn(1000);
 		when(client.getKeyboardIdleTicks()).thenReturn(1000);
+		// resetSession runs inline when called on the client thread; tests run on one
+		when(client.isClientThread()).thenReturn(true);
 
 		// Default coins stubbing
 		int coinsId = net.runelite.api.gameval.ItemID.COINS;
@@ -674,7 +678,6 @@ public class CoinFlowPluginEventTest
 		for (int interfaceId : new int[]{
 			InterfaceID.TRADEMAIN,
 			InterfaceID.TRADECONFIRM,
-			InterfaceID.SHOPMAIN,
 			InterfaceID.OMNISHOP_MAIN,
 			InterfaceID.SEED_VAULT,
 			InterfaceID.DEATH_COFFER,
@@ -692,6 +695,29 @@ public class CoinFlowPluginEventTest
 			Assert.assertFalse("Interface " + interfaceId + " close must restore tracking",
 				plugin.isTrackingSuppressed());
 		}
+	}
+
+	@Test
+	public void shopInterfaces_markShopOpenWithoutSuppressing()
+	{
+		WidgetLoaded openMain = new WidgetLoaded();
+		openMain.setGroupId(InterfaceID.SHOPMAIN);
+		plugin.onWidgetLoaded(openMain);
+
+		WidgetLoaded openSide = new WidgetLoaded();
+		openSide.setGroupId(InterfaceID.SHOPSIDE);
+		plugin.onWidgetLoaded(openSide);
+
+		Assert.assertTrue("Shop must be marked open", plugin.interfaceTracker.isShopOpen());
+		Assert.assertFalse("Standard shop must NOT suppress tracking", plugin.isTrackingSuppressed());
+
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SHOPMAIN, 0, false));
+		Assert.assertTrue("Shop must remain open while side panel is up", plugin.interfaceTracker.isShopOpen());
+
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SHOPSIDE, 0, false));
+		Assert.assertFalse("Shop must report closed once both widgets are gone", plugin.interfaceTracker.isShopOpen());
+		Assert.assertFalse("Closing a shop must NOT schedule a re-baseline; the shop branch keeps the snapshot current, "
+			+ "and a re-baseline would swallow the first post-shop diff", plugin.isNeedsRebaseline());
 	}
 
 	@Test
@@ -1013,6 +1039,44 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(-1_500L, plugin.getSession().getNetProfit());
 		// Screen clutter prevention: gold drops are purely for income
 		verify(goldDropOverlay, never()).addDrop(anyString(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
+	}
+
+	@Test
+	public void rebaselineGraceWindow_firstPotionSip_isStillCharged()
+	{
+		int pot4Id = 12625;
+		int pot3Id = 12627;
+		stubTrackableItem(pot4Id, "Stamina potion(4)", 6_000L);
+		stubTrackableItem(pot3Id, "Stamina potion(3)", 4_500L);
+
+		// Post-interface-close rebaseline window (e.g. just closed the GE)
+		plugin.previousInventorySnapshot = snapshot(pot4Id, 1);
+		plugin.snapshotInitialized = true;
+		plugin.setNeedsRebaseline(true);
+		plugin.rebaselineGraceTicks = 2;
+
+		// First sip inside the grace window must reconcile, not be baselined away
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, pot3Id, 1)
+		));
+
+		Assert.assertFalse(plugin.isNeedsRebaseline());
+		Assert.assertEquals(0, plugin.rebaselineGraceTicks);
+		Assert.assertEquals(1_500L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(-1_500L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void onMenuOptionClicked_collectOnNonGeTarget_doesNotRebaseline()
+	{
+		net.runelite.api.MenuEntry collectEntry = mock(net.runelite.api.MenuEntry.class);
+		when(collectEntry.getOption()).thenReturn("Collect");
+		when(collectEntry.getTarget()).thenReturn("Blast mine operator");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(collectEntry));
+
+		Assert.assertFalse(plugin.isNeedsRebaseline());
+		Assert.assertEquals(0, plugin.rebaselineGraceTicks);
 	}
 
 	@Test
@@ -1584,6 +1648,342 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
 		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(cookingCapeId));
 		verify(goldDropOverlay, never()).addDrop(anyString(), anyInt(), anyInt());
+	}
+
+	@Test
+	public void dropAndPickup_potionWithDropClick_isNotExpensedAndPickupIsNotLoot()
+	{
+		int potionId = 185; // Superantipoison(1)
+		stubTrackableItem(potionId, "Superantipoison(1)", 329L);
+
+		// Baseline with potion (pre-session / banked)
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, potionId, 1)));
+
+		// Player clicks "Drop" on it
+		net.runelite.api.MenuEntry dropEntry = mock(net.runelite.api.MenuEntry.class);
+		when(dropEntry.getOption()).thenReturn("Drop");
+		when(dropEntry.getTarget()).thenReturn("<col=ff9040>Superantipoison(1)</col>");
+		when(dropEntry.getItemId()).thenReturn(potionId);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(dropEntry));
+
+		// Potion leaves inventory
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		// Must be a drop, not a drink: no expense, tracked as an owned drop
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(potionId));
+		Assert.assertTrue("Intent consumed once the drop is seen", plugin.recentDropIntents.isEmpty());
+
+		// Pick it back up
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, potionId, 1)));
+
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(potionId));
+	}
+
+	// ── Count Drops as Spent ───────────────────────────────────────────────
+
+	private void clickDrop(int itemId, String name)
+	{
+		net.runelite.api.MenuEntry dropEntry = mock(net.runelite.api.MenuEntry.class);
+		when(dropEntry.getOption()).thenReturn("Drop");
+		when(dropEntry.getTarget()).thenReturn("<col=ff9040>" + name + "</col>");
+		when(dropEntry.getItemId()).thenReturn(itemId);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(dropEntry));
+	}
+
+	@Test
+	public void dropsAsSpent_ownedItemDrop_isExpensedNotIgnored()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(1_000L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(-1_000L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyExpensedDrops.get(spadeId));
+		Assert.assertFalse(plugin.recentlyDroppedItems.containsKey(spadeId));
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(spadeId));
+	}
+
+	@Test
+	public void dropsAsSpent_ownedItemDropAndPickup_reversesExpense()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		Assert.assertEquals(1_000L, plugin.getSession().getTotalExpenses());
+
+		// Pickup-only tick: nothing else changes, so the reversal must still fire
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.getSession().getTrackedExpenses().containsKey(spadeId));
+		Assert.assertFalse(plugin.recentlyExpensedDrops.containsKey(spadeId));
+		verify(goldDropOverlay, never()).addDrop(anyString(), anyInt(), anyInt());
+	}
+
+	@Test
+	public void dropsAsSpent_sessionGainedDrop_keepsGrossAndChargesSpent()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int coalId = 453;
+		stubTrackableItem(coalId, "Coal", 150L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 10)));
+		Assert.assertEquals(1_500L, plugin.getSession().getGrossProfit());
+
+		clickDrop(coalId, "Coal");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals("Gross stays credited", 1_500L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals("Drop is charged to Spent", 1_500L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals("Gain retired so it can't be deducted twice",
+			0L, plugin.getSession().getTrackedItems().get(coalId).getRemainingQuantity());
+		Assert.assertFalse(plugin.recentlyDroppedItems.containsKey(coalId));
+	}
+
+	@Test
+	public void dropsAsSpent_sessionGainedDropAndPickup_restoresGain()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int coalId = 453;
+		stubTrackableItem(coalId, "Coal", 150L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 10)));
+		clickDrop(coalId, "Coal");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 10)));
+
+		Assert.assertEquals(1_500L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(1_500L, plugin.getSession().getTotalProfit());
+		CoinFlowSession.TrackedItem gain = plugin.getSession().getTrackedItems().get(coalId);
+		Assert.assertEquals("Pickup is not fresh loot", 10L, gain.getQuantity());
+		Assert.assertEquals("Retired units are deductible again", 10L, gain.getRemainingQuantity());
+		Assert.assertFalse(plugin.recentlyExpensedDrops.containsKey(coalId));
+	}
+
+	@Test
+	public void dropsAsSpent_partialPickup_reversesOnlyRecoveredUnits()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int coalId = 453;
+		stubTrackableItem(coalId, "Coal", 150L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 10)));
+		clickDrop(coalId, "Coal");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		Assert.assertEquals(1_500L, plugin.getSession().getTotalExpenses());
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 4)));
+
+		Assert.assertEquals(900L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(Integer.valueOf(6), plugin.recentlyExpensedDrops.get(coalId));
+	}
+
+	@Test
+	public void dropsAsSpent_potionWithDropClick_isExpensedAsWholeItem()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int potionId = 185; // Superantipoison(1)
+		stubTrackableItem(potionId, "Superantipoison(1)", 329L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, potionId, 1)));
+		clickDrop(potionId, "Superantipoison(1)");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(329L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(1L, plugin.getSession().getTrackedExpenses().get(potionId).getQuantity());
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, potionId, 1)));
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void dropsAsSpent_lossWithoutDropClick_keepsLegacyBehavior()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		// Item leaves inventory with no "Drop" click (quest hand-in, Destroy, death, ...)
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertTrue(plugin.recentlyExpensedDrops.isEmpty());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(spadeId));
+	}
+
+	@Test
+	public void dropsAsSpent_dropCoins_isExpensedAtOneGpEach()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int coinsId = ItemID.COINS;
+		when(itemManager.canonicalize(coinsId)).thenReturn(coinsId);
+		when(itemManager.getItemPrice(coinsId)).thenReturn(0L);
+		ItemComposition coinsComp = mock(ItemComposition.class);
+		when(coinsComp.getName()).thenReturn("Coins");
+		when(itemManager.getItemComposition(coinsId)).thenReturn(coinsComp);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coinsId, 5_000)));
+		clickDrop(coinsId, "Coins");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(5_000L, plugin.getSession().getTotalExpenses());
+	}
+
+	@Test
+	public void dropsAsSpent_requiresTrackSpent()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		when(config.trackSpent()).thenReturn(false);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertTrue(plugin.recentlyExpensedDrops.isEmpty());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(spadeId));
+	}
+
+	@Test
+	public void dropsAsSpent_toggleOffBeforePickup_stillReversesAndCreditsNoLoot()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		Assert.assertEquals(1_000L, plugin.getSession().getTotalExpenses());
+
+		when(config.countDropsAsSpent()).thenReturn(false);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertFalse(plugin.recentlyExpensedDrops.containsKey(spadeId));
+	}
+
+	@Test
+	public void dropsAsSpent_toggleOff_legacyDropPathUnchanged()
+	{
+		when(config.countDropsAsSpent()).thenReturn(false);
+		int coalId = 453;
+		stubTrackableItem(coalId, "Coal", 150L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, coalId, 10)));
+		clickDrop(coalId, "Coal");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals("Legacy: drop deducts gross", 0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(10), plugin.recentlyDroppedItems.get(coalId));
+		Assert.assertTrue(plugin.recentlyExpensedDrops.isEmpty());
+	}
+
+	@Test
+	public void dropsAsSpent_pendingRecordsExpireWithOtherDropRecords()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(10);
+		plugin.snapshotInitialized = true;
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.previousInventorySnapshot = snapshot(spadeId, 1);
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyExpensedDrops.get(spadeId));
+		Assert.assertEquals(Integer.valueOf(10), plugin.droppedItemTicks.get(spadeId));
+
+		when(client.getTickCount()).thenReturn(650);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertFalse(plugin.recentlyExpensedDrops.containsKey(spadeId));
+		Assert.assertFalse(plugin.droppedItemTicks.containsKey(spadeId));
+		Assert.assertEquals("Expense stays once the ground item is gone", 1_000L, plugin.getSession().getTotalExpenses());
+	}
+
+	@Test
+	public void dropsAsSpent_resetSession_clearsPendingDrops()
+	{
+		when(config.countDropsAsSpent()).thenReturn(true);
+		int spadeId = 952;
+		stubTrackableItem(spadeId, "Spade", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, spadeId, 1)));
+		clickDrop(spadeId, "Spade");
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		Assert.assertFalse(plugin.recentlyExpensedDrops.isEmpty());
+
+		plugin.resetSession();
+
+		Assert.assertTrue(plugin.recentlyExpensedDrops.isEmpty());
+	}
+
+	@Test
+	public void dialoguePurchase_coinsOutItemsIn_recordsBasisNotLoot()
+	{
+		// Zaff: 120 battlestaffs for 840,000 gp via NPC dialogue (no SHOPMAIN interface)
+		int staffId = 1391;
+		stubTrackableItem(staffId, "Battlestaff", 7945L);
+		stubTrackableItem(ItemID.COINS, "Coins", 1L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, ItemID.COINS, 1_000_000)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, ItemID.COINS, 160_000, staffId, 120)));
+
+		Assert.assertEquals("Purchase is an asset conversion, not loot", 0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(120, plugin.grandExchangeTracker.basisQuantity(staffId));
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(ItemID.COINS));
+
+		// Selling them later realizes margin against the 7,000 gp basis
+		GrandExchangeTracker.GeLedger ledger = plugin.grandExchangeTracker.settleSell(staffId, 120, 960_000, plugin.getSession());
+		Assert.assertEquals(960_000L - 120L * 7_000L - 120L * 160L, ledger.netDelta); // minus 2% tax (160/staff @ 8000)
+	}
+
+	@Test
+	public void potionLossWithoutDropClick_isStillExpensedAsConsumed()
+	{
+		int potionId = 185;
+		stubTrackableItem(potionId, "Superantipoison(1)", 329L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV, potionId, 1)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(329L, plugin.getSession().getTotalExpenses());
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(potionId));
 	}
 
 	@Test

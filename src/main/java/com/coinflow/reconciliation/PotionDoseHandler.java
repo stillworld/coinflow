@@ -57,6 +57,11 @@ public class PotionDoseHandler implements ReconciliationHandler
 				continue;
 			}
 			int canonicalId = itemManager.canonicalize(rawId);
+			if (context.isDropIntent(canonicalId))
+			{
+				// Dropped, not drunk: leave for the own-drop path
+				continue;
+			}
 			String name = context.getItemName(canonicalId);
 			ConsumableRegistry.PotionDose potion = ConsumableRegistry.parsePotion(name);
 			if (potion != null)
@@ -186,14 +191,41 @@ public class PotionDoseHandler implements ReconciliationHandler
 				}
 			}
 
+			// Drain purchase basis as bottles change form or are drunk: the cost
+			// share of doses still held moves to the gained dose forms so a
+			// consumed bottle's basis can't attach to a later sale of an
+			// identical pre-session potion. Runs even for pure decants.
+			long basisCost = 0;
+			int basisDoses = 0;
+			com.coinflow.GrandExchangeTracker tracker = context.getGrandExchangeTracker();
+			if (tracker != null)
+			{
+				List<com.coinflow.GrandExchangeTracker.PotionBottle> lostBottles = new ArrayList<>();
+				for (PotionEntry p : lostList)
+				{
+					lostBottles.add(new com.coinflow.GrandExchangeTracker.PotionBottle(p.canonicalId, p.dose, p.qty));
+				}
+				List<com.coinflow.GrandExchangeTracker.PotionBottle> gainedBottles = new ArrayList<>();
+				for (PotionEntry p : gainedList)
+				{
+					gainedBottles.add(new com.coinflow.GrandExchangeTracker.PotionBottle(p.canonicalId, p.dose, p.qty));
+				}
+				long[] result = tracker.reconcilePotionBasis(lostBottles, gainedBottles, dosesConsumed);
+				basisCost = result[0];
+				basisDoses = (int) result[1];
+			}
+
 			// If doses were consumed, record supply expense
 			if (dosesConsumed > 0 && sampleCanonicalId != -1 && sampleDose > 0)
 			{
 				long potionPrice = itemManager.getItemPrice(sampleCanonicalId);
 				long dosePrice = Math.max(1L, potionPrice / sampleDose);
+
+				long expenseTotal = basisCost + (long) Math.max(0, dosesConsumed - basisDoses) * dosePrice;
 				String expenseName = (sampleBaseName != null ? sampleBaseName : "Potion") + " (dose)";
-				context.addSupplyExpense(sampleCanonicalId,
-					new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed, dosePrice));
+				context.addFractionalSupplyExpense(sampleCanonicalId,
+					new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed,
+						expenseTotal / dosesConsumed));
 			}
 
 			// Reconcile empty vials if vials were freed

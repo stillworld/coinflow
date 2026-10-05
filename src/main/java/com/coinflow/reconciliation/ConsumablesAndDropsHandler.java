@@ -5,6 +5,7 @@ import com.coinflow.ConsumableRegistry;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ItemComposition;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 
 /**
@@ -41,24 +42,55 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				continue;
 			}
 
-			boolean isConsumable = ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
-				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName);
+			// Opt-in: a confirmed "Drop" click is charged as a supply expense at
+			// market price. Only click-confirmed drops qualify so unexplained
+			// losses (quest hand-ins, Destroy, death) keep the legacy path.
+			if (context.isDropsAsSpent() && context.isDropIntent(itemId))
+			{
+				long price = priceOf(itemId, itemManager);
+				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				context.getRecentlyExpensedDrops().merge(itemId, quantity, Integer::sum);
+
+				if (session != null)
+				{
+					CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
+					if (existingGain != null && existingGain.getRemainingQuantity() > 0)
+					{
+						context.markSessionGainConsumed(itemId,
+							Math.min(quantity, existingGain.getRemainingQuantity()));
+					}
+				}
+
+				log.debug("Dropped item expensed: {} x{} @ {} gp = {} gp",
+					itemName, quantity, price, (long) quantity * price);
+				continue;
+			}
+
+			// A "Drop" click means the item left for the ground, not the player's
+			// stomach: route through the own-drop path regardless of item type.
+			boolean isConsumable = !context.isDropIntent(itemId)
+				&& (ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
+				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName));
 
 			if (isConsumable)
 			{
-				long price = itemManager.getItemPrice(itemId);
-				if (price <= 0)
-				{
-					ItemComposition comp = itemManager.getItemComposition(itemId);
-					if (comp != null)
-					{
-						price = comp.getHaPrice();
-					}
-				}
+				long price = priceOf(itemId, itemManager);
 
 				CoinFlowSession.TrackedItem expenseItem =
 					new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
 				context.addSupplyExpense(itemId, expenseItem);
+
+				// Retire matching session gains so a later drop/sale of pre-session
+				// stock cannot deduct the already-consumed loot a second time.
+				if (session != null)
+				{
+					CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
+					if (existingGain != null && existingGain.getRemainingQuantity() > 0)
+					{
+						context.markSessionGainConsumed(itemId,
+							Math.min(quantity, existingGain.getRemainingQuantity()));
+					}
+				}
 
 				log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
@@ -70,9 +102,9 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				if (session != null)
 				{
 					CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
-					if (existingGain != null && existingGain.getQuantity() > 0)
+					if (existingGain != null && existingGain.getRemainingQuantity() > 0)
 					{
-						sessionDeductibleQty = Math.min(quantity, existingGain.getQuantity());
+						sessionDeductibleQty = (int) Math.min(quantity, existingGain.getRemainingQuantity());
 						long price = existingGain.getPriceEach();
 
 						CoinFlowSession.TrackedItem droppedItem =
@@ -98,5 +130,28 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				}
 			}
 		}
+	}
+
+	/**
+	 * Market price with the same fallbacks used for gains: GE price, then the
+	 * fixed coin/platinum values, then high alchemy for untradeables.
+	 */
+	private static long priceOf(int itemId, ItemManager itemManager)
+	{
+		long price = itemManager.getItemPrice(itemId);
+		if (price > 0)
+		{
+			return price;
+		}
+		if (itemId == ItemID.COINS)
+		{
+			return 1;
+		}
+		if (itemId == ItemID.PLATINUM)
+		{
+			return 1000;
+		}
+		ItemComposition comp = itemManager.getItemComposition(itemId);
+		return comp != null ? comp.getHaPrice() : 0;
 	}
 }

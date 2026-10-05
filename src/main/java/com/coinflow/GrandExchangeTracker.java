@@ -6,6 +6,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
@@ -33,9 +34,14 @@ import net.runelite.api.gameval.ItemID;
  *
  * Buy fills are not session entries; they are asset conversions. The coins spent
  * are stored as cost basis so a later sale realizes the true margin.
+ *
+ * The FIFO cost-basis pool and sell-settlement logic are shared with shop
+ * trades ({@link ShopTracker}): shop purchases add basis lots here, and shop
+ * sales decompose via {@link #settleShopSell}, so cross-venue flows
+ * (buy shop → sell GE, buy GE → sell shop) realize the correct margin.
  */
 @Slf4j
-final class GrandExchangeTracker
+public final class GrandExchangeTracker
 {
 	/**
 	 * An incremental fill observed on one GE slot between two offer snapshots.
@@ -231,19 +237,54 @@ final class GrandExchangeTracker
 	 */
 	GeLedger settleSell(int itemId, int quantity, long grossProceeds, CoinFlowSession session)
 	{
+		return settleSell(itemId, quantity, grossProceeds, session, false);
+	}
+
+	/**
+	 * Same as {@link #settleSell} with control over the untracked portion's
+	 * carried value. When {@code untrackedAsIncome} is unset, untracked stock
+	 * is carried at its gross proceeds share so the asset conversion nets to
+	 * zero (residual = GE tax only). When set, untracked stock is carried at
+	 * zero so the net proceeds share surfaces as income instead.
+	 */
+	GeLedger settleSell(int itemId, int quantity, long grossProceeds, CoinFlowSession session,
+		boolean untrackedAsIncome)
+	{
+		return settle(itemId, quantity, grossProceeds,
+			GrandExchangeTax.netProceeds(itemId, quantity, grossProceeds), session, untrackedAsIncome);
+	}
+
+	/**
+	 * Settles a shop sale exactly like {@link #settleSell} but with no tax:
+	 * net proceeds equal the coins received. When {@code untrackedAsIncome}
+	 * is unset the untracked portion's residual is always zero, so selling
+	 * pre-session (banked) stock to a shop records nothing — an asset
+	 * conversion, matching the GE convention. When set, its share of the
+	 * proceeds surfaces as income.
+	 */
+	GeLedger settleShopSell(int itemId, int quantity, long proceeds, CoinFlowSession session,
+		boolean untrackedAsIncome)
+	{
+		return settle(itemId, quantity, proceeds, proceeds, session, untrackedAsIncome);
+	}
+
+	private GeLedger settle(int itemId, int quantity, long grossProceeds, long netProceeds,
+		CoinFlowSession session, boolean untrackedAsIncome)
+	{
 		GeLedger ledger = new GeLedger();
 		if (quantity <= 0)
 		{
 			return ledger;
 		}
-		long netProceeds = GrandExchangeTax.netProceeds(itemId, quantity, grossProceeds);
 
 		long[] basis = consumeBasis(itemId, quantity);
 		int basisQty = (int) basis[0];
 		long basisCost = basis[1];
 
 		CoinFlowSession.TrackedItem tracked = session != null ? session.getTrackedItems().get(itemId) : null;
-		int trackedQty = tracked != null ? Math.min(quantity - basisQty, tracked.getQuantity()) : 0;
+		int trackedQty = tracked != null
+			? (int) Math.min(quantity - basisQty, tracked.getRemainingQuantity())
+			: 0;
 
 		int untrackedQty = quantity - basisQty - trackedQty;
 
@@ -282,19 +323,24 @@ final class GrandExchangeTracker
 			addCoinGain(ledger, pTracked);
 			ledger.deductions.put(itemId,
 				new CoinFlowSession.TrackedItem(itemId, tracked.getName(), trackedQty, tracked.getPriceEach()));
-			ledger.netDelta += pTracked - (long) trackedQty * tracked.getPriceEach();
+			long carried = tracked.getRemainingQuantity() > 0
+				? tracked.getRemainingValue() * trackedQty / tracked.getRemainingQuantity()
+				: (long) trackedQty * tracked.getPriceEach();
+			ledger.netDelta += pTracked - carried;
 		}
 
 		if (untrackedQty > 0)
 		{
-			long carried = grossProceeds - (grossProceeds * basisQty / quantity) - (grossProceeds * trackedQty / quantity);
+			long carried = untrackedAsIncome
+				? 0
+				: grossProceeds - (grossProceeds * basisQty / quantity) - (grossProceeds * trackedQty / quantity);
 			long residual = pUntracked - carried;
 			ledger.netDelta += residual;
 			if (residual < 0)
 			{
 				ledger.expenses.merge(GrandExchangeTax.TAX_ITEM_ID,
 					new CoinFlowSession.TrackedItem(GrandExchangeTax.TAX_ITEM_ID, GrandExchangeTax.TAX_ITEM_NAME, clampQty(-residual), 1L),
-					(a, b) -> a.withAdditionalQuantity(b.getQuantity()));
+					(a, b) -> a.merge(b));
 			}
 			else if (residual > 0)
 			{
@@ -305,10 +351,142 @@ final class GrandExchangeTracker
 		return ledger;
 	}
 
+	/**
+	 * Reprices consumed supplies against held cost basis. Quantity covered by
+	 * FIFO basis is charged at its actual purchase cost; any remainder keeps the
+	 * expense's market price. Draining basis here keeps lots from being orphaned
+	 * (and later mis-attributed to a sale) once the bought items are used up.
+	 *
+	 * <p>Because a {@link CoinFlowSession.TrackedItem} carries one price, a mix
+	 * of basis-covered and market-priced units collapses to a rounded average.
+	 *
+	 * @param fractionalIds item ids whose expense quantity is in sub-units
+	 *        (doses, portions) and therefore must not drain whole-item basis
+	 */
+	Map<Integer, CoinFlowSession.TrackedItem> repriceFromBasis(
+		Map<Integer, CoinFlowSession.TrackedItem> expenses, Set<Integer> fractionalIds)
+	{
+		if (expenses == null || expenses.isEmpty() || costBasis.isEmpty())
+		{
+			return expenses;
+		}
+
+		Map<Integer, CoinFlowSession.TrackedItem> result = new HashMap<>(expenses);
+		for (Map.Entry<Integer, CoinFlowSession.TrackedItem> entry : expenses.entrySet())
+		{
+			CoinFlowSession.TrackedItem item = entry.getValue();
+			int qty = (int) Math.min(Integer.MAX_VALUE, item.getQuantity());
+			if (qty <= 0 || !costBasis.containsKey(item.getItemId())
+				|| (fractionalIds != null && fractionalIds.contains(entry.getKey())))
+			{
+				continue;
+			}
+
+			long[] basis = consumeBasis(item.getItemId(), qty);
+			int basisQty = (int) basis[0];
+			if (basisQty == 0)
+			{
+				continue;
+			}
+
+			long total = basis[1] + (long) (qty - basisQty) * item.getPriceEach();
+			long priceEach = (total + qty / 2) / qty;
+			result.put(entry.getKey(),
+				new CoinFlowSession.TrackedItem(item.getItemId(), item.getName(), qty, priceEach));
+
+			log.debug("Repriced supply from basis: {} x{} ({} from basis @ {} gp total) -> {} gp each",
+				item.getName(), qty, basisQty, basis[1], priceEach);
+		}
+		return result;
+	}
+
 	void reset()
 	{
 		observedOffers.clear();
 		costBasis.clear();
+	}
+
+	/**
+	 * A group of same-base potion bottles observed in an inventory diff.
+	 * {@code doses} is the dose level of the bottle form (1-4); {@code quantity}
+	 * is the number of bottles.
+	 */
+	public static final class PotionBottle
+	{
+		public final int itemId;
+		public final int doses;
+		public final int quantity;
+
+		public PotionBottle(int itemId, int doses, int quantity)
+		{
+			this.itemId = itemId;
+			this.doses = doses;
+			this.quantity = quantity;
+		}
+	}
+
+	/**
+	 * Follows purchase cost basis as potions change dose level. Consumes basis
+	 * for every lost bottle, redistributes the share still held in liquid to the
+	 * gained bottle forms, and returns the cost attributable to the consumed
+	 * doses.
+	 *
+	 * <p>This prevents a fully drunk bottle's basis from lingering and later
+	 * being mis-attributed to the sale of an identical pre-session potion.
+	 *
+	 * @param lost lost bottle groups for one potion base
+	 * @param gained gained bottle groups for the same potion base
+	 * @param dosesConsumed net doses that left the player's possession
+	 * @return {cost of basis-covered consumed doses, number of consumed doses covered by basis}
+	 */
+	public long[] reconcilePotionBasis(List<PotionBottle> lost, List<PotionBottle> gained, int dosesConsumed)
+	{
+		if (costBasis.isEmpty())
+		{
+			return new long[]{0, 0};
+		}
+
+		long totalBasisCost = 0;
+		int totalLostDoses = 0;
+		int basisDosesHeld = 0;
+		for (PotionBottle p : lost)
+		{
+			totalLostDoses += p.doses * p.quantity;
+			long[] basis = consumeBasis(p.itemId, p.quantity);
+			totalBasisCost += basis[1];
+			basisDosesHeld += p.doses * (int) basis[0];
+		}
+		if (totalBasisCost <= 0 || totalLostDoses <= 0)
+		{
+			return new long[]{0, 0};
+		}
+
+		int totalGainedDoses = 0;
+		for (PotionBottle p : gained)
+		{
+			totalGainedDoses += p.doses * p.quantity;
+		}
+
+		// Cost follows the liquid: the share still held moves to the gained
+		// dose forms, the rest belongs to the consumed doses.
+		long retainedCost = totalBasisCost * Math.min(totalGainedDoses, totalLostDoses) / totalLostDoses;
+		long allocated = 0;
+		for (int i = 0; i < gained.size(); i++)
+		{
+			PotionBottle p = gained.get(i);
+			long share = (i == gained.size() - 1 || totalGainedDoses <= 0)
+				? retainedCost - allocated
+				: retainedCost * p.doses * p.quantity / totalGainedDoses;
+			if (share > 0)
+			{
+				addBasis(p.itemId, p.quantity, share);
+			}
+			allocated += share;
+		}
+
+		long consumedCost = totalBasisCost - allocated;
+		int basisDosesConsumed = Math.min(dosesConsumed, basisDosesHeld);
+		return new long[]{consumedCost, basisDosesConsumed};
 	}
 
 	/**
@@ -356,14 +534,14 @@ final class GrandExchangeTracker
 	private static void addCoinGain(GeLedger ledger, long amount)
 	{
 		ledger.gains.merge(ItemID.COINS,
-			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", clampQty(amount), 1L),
-			(a, b) -> a.withAdditionalQuantity(b.getQuantity()));
+			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L),
+			(a, b) -> a.merge(b));
 	}
 
 	private static void addCoinExpense(GeLedger ledger, long amount)
 	{
 		ledger.expenses.merge(ItemID.COINS,
-			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", clampQty(amount), 1L),
-			(a, b) -> a.withAdditionalQuantity(b.getQuantity()));
+			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L),
+			(a, b) -> a.merge(b));
 	}
 }

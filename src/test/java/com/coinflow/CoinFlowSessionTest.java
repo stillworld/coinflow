@@ -1,6 +1,7 @@
 package com.coinflow;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.junit.Assert;
@@ -500,6 +501,66 @@ public class CoinFlowSessionTest
 	// ── TrackedItem ──────────────────────────────────────────────────────
 
 	@Test
+	public void changedPrices_deductHistoricalValueExactly()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Yew logs", 10, 100))
+			.withGains(gains(1, "Yew logs", 5, 200));
+		session = session.withGainsLossesAndExpenses(Collections.emptyMap(),
+			gains(1, "Yew logs", 7, 200), Collections.emptyMap());
+		session = session.withGainsLossesAndExpenses(Collections.emptyMap(),
+			gains(1, "Yew logs", 8, 200), Collections.emptyMap());
+		Assert.assertEquals(0L, session.getGrossProfit());
+		Assert.assertTrue(session.getTrackedItems().isEmpty());
+	}
+
+	@Test
+	public void coinGainsAboveIntegerLimit_doNotOverflowOnDeduction()
+	{
+		int coins = net.runelite.api.gameval.ItemID.COINS;
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(coins, "Coins", 1_500_000_000, 1))
+			.withGains(gains(coins, "Coins", 1_500_000_000, 1));
+		Assert.assertEquals(3_000_000_000L, session.getTrackedItems().get(coins).getQuantity());
+		session = session.withGainsLossesAndExpenses(Collections.emptyMap(),
+			gains(coins, "Coins", 1, 1), Collections.emptyMap());
+		Assert.assertEquals(2_999_999_999L, session.getGrossProfit());
+	}
+
+	@Test
+	public void consumedSessionGain_cannotBeDeductedAgain()
+	{
+		// Loot a shark, eat it (expense), then drop an identical banked shark:
+		// the consumed loot must not be deducted a second time.
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(385, "Shark", 1, 1_000))
+			.withExpenses(gains(385, "Shark", 1, 1_000))
+			.markConsumed(Collections.singletonMap(385, 1L));
+		Assert.assertEquals(0L, session.getNetProfit());
+
+		session = session.withGainsLossesAndExpenses(
+			Collections.emptyMap(), gains(385, "Shark", 1, 1_000), Collections.emptyMap());
+		Assert.assertEquals(1_000L, session.getGrossProfit());
+		Assert.assertEquals(0L, session.getNetProfit());
+	}
+
+	@Test
+	public void partialConsumption_leavesRemainingDeductible()
+	{
+		// Loot 2 sharks, eat one: one unit of the credited gain is still
+		// deductible if the player then drops/sells a shark.
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(385, "Shark", 2, 1_000))
+			.withExpenses(gains(385, "Shark", 1, 1_000))
+			.markConsumed(Collections.singletonMap(385, 1L));
+
+		session = session.withGainsLossesAndExpenses(
+			Collections.emptyMap(), gains(385, "Shark", 1, 1_000), Collections.emptyMap());
+		Assert.assertEquals(1_000L, session.getGrossProfit());
+		Assert.assertEquals(0L, session.getNetProfit());
+	}
+
+	@Test
 	public void trackedItem_totalValueIsQtyTimesPrice()
 	{
 		CoinFlowSession.TrackedItem item = new CoinFlowSession.TrackedItem(1, "Log", 200, 150L);
@@ -587,5 +648,109 @@ public class CoinFlowSessionTest
 		Assert.assertEquals(0L, session.getGoalRemaining(goal, false));
 		Assert.assertEquals(1.0, session.getGoalProgress(goal, false), 0.001);
 		Assert.assertEquals(0L, session.getGoalEtaSeconds(goal, false, false));
+	}
+
+	// ── Expense Reversal (Count Drops as Spent) ─────────────────────────
+
+	@Test
+	public void withExpenseReversal_fullQuantity_removesRowAndRestoresSpent()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withExpenses(gains(1, "Coal", 10, 150L));
+		Assert.assertEquals(1_500L, session.getTotalExpenses());
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 10L));
+
+		Assert.assertEquals(0L, session.getTotalExpenses());
+		Assert.assertFalse(session.getTrackedExpenses().containsKey(1));
+		Assert.assertEquals(0L, session.getTotalProfit());
+	}
+
+	@Test
+	public void withExpenseReversal_partialQuantity_reducesProportionally()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withExpenses(gains(1, "Coal", 10, 150L));
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 4L));
+
+		Assert.assertEquals(900L, session.getTotalExpenses());
+		CoinFlowSession.TrackedItem row = session.getTrackedExpenses().get(1);
+		Assert.assertEquals(6L, row.getQuantity());
+		Assert.assertEquals(900L, row.getTotalValue());
+	}
+
+	@Test
+	public void withExpenseReversal_moreThanExpensed_capsAtRow()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withExpenses(gains(1, "Coal", 3, 150L));
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 10L));
+
+		Assert.assertEquals(0L, session.getTotalExpenses());
+		Assert.assertFalse(session.getTrackedExpenses().containsKey(1));
+	}
+
+	@Test
+	public void withExpenseReversal_unknownItemOrEmpty_isNoop()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withExpenses(gains(1, "Coal", 3, 150L));
+
+		Assert.assertSame(session, session.withExpenseReversal(Collections.emptyMap()));
+		Assert.assertSame(session, session.withExpenseReversal(Collections.singletonMap(99, 5L)));
+		Assert.assertSame(session, session.withExpenseReversal(Collections.singletonMap(1, 0L)));
+		Assert.assertEquals(450L, session.getTotalExpenses());
+	}
+
+	@Test
+	public void withExpenseReversal_blendedRow_reversesAtAveragePrice()
+	{
+		// 5 eaten at 100 + 5 dropped at 200 share one row worth 1,500
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withExpenses(gains(1, "Shark", 5, 100L))
+			.withExpenses(gains(1, "Shark", 5, 200L));
+		Assert.assertEquals(1_500L, session.getTotalExpenses());
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 5L));
+
+		Assert.assertEquals("Half the units reverse half the carried value", 750L, session.getTotalExpenses());
+		Assert.assertEquals(5L, session.getTrackedExpenses().get(1).getQuantity());
+	}
+
+	@Test
+	public void withExpenseReversal_restoresConsumedSessionGain()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L))
+			.withExpenses(gains(1, "Coal", 4, 150L))
+			.markConsumed(Collections.singletonMap(1, 4L));
+		Assert.assertEquals(6L, session.getTrackedItems().get(1).getRemainingQuantity());
+		Assert.assertEquals(900L, session.getTrackedItems().get(1).getRemainingValue());
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 4L));
+
+		CoinFlowSession.TrackedItem gain = session.getTrackedItems().get(1);
+		Assert.assertEquals(10L, gain.getRemainingQuantity());
+		Assert.assertEquals(1_500L, gain.getRemainingValue());
+		Assert.assertEquals(1_500L, session.getGrossProfit());
+		Assert.assertEquals(0L, session.getTotalExpenses());
+		Assert.assertEquals(1_500L, session.getTotalProfit());
+	}
+
+	@Test
+	public void withExpenseReversal_restoreNeverExceedsOriginalQuantity()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L))
+			.withExpenses(gains(1, "Coal", 2, 150L))
+			.markConsumed(Collections.singletonMap(1, 2L));
+
+		session = session.withExpenseReversal(Collections.singletonMap(1, 50L));
+
+		CoinFlowSession.TrackedItem gain = session.getTrackedItems().get(1);
+		Assert.assertEquals(10L, gain.getRemainingQuantity());
+		Assert.assertEquals(1_500L, gain.getRemainingValue());
 	}
 }

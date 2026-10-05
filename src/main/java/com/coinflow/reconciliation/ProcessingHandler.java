@@ -37,7 +37,7 @@ public class ProcessingHandler implements ReconciliationHandler
 		{
 			for (Map.Entry<Integer, CoinFlowSession.TrackedItem> entry : session.getTrackedItems().entrySet())
 			{
-				availableSessionGains.put(entry.getKey(), entry.getValue().getQuantity());
+				availableSessionGains.put(entry.getKey(), (int) Math.min(Integer.MAX_VALUE, entry.getValue().getRemainingQuantity()));
 			}
 		}
 

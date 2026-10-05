@@ -10,6 +10,8 @@ import net.runelite.client.game.ItemManager;
  *    cancels them out from rawGains so picking up owned items does not create fake profit.
  * 2. For items gained in the current session (e.g. mined Coal, chopped logs), decrements
  *    recentlyDroppedItems and allows rawGains to restore the deducted profit.
+ * 3. For items expensed on drop (Count Drops as Spent), cancels them out from rawGains
+ *    and records an expense reversal so the Spent charge is undone.
  */
 public class DroppedItemPickupHandler implements ReconciliationHandler
 {
@@ -20,6 +22,8 @@ public class DroppedItemPickupHandler implements ReconciliationHandler
 			context.getRawGains(),
 			context.getRecentlyDroppedItems(),
 			context.getRecentlyDroppedOwnedItems(),
+			context.getRecentlyExpensedDrops(),
+			context.getExpenseReversals(),
 			context.getItemManager());
 	}
 
@@ -34,6 +38,78 @@ public class DroppedItemPickupHandler implements ReconciliationHandler
 		Map<Integer, Integer> recentlyDroppedOwnedItems,
 		ItemManager itemManager)
 	{
+		applyDropReconciliation(rawGains, recentlyDroppedItems, recentlyDroppedOwnedItems,
+			null, null, itemManager);
+	}
+
+	/**
+	 * Variant that also matches expensed drops: matched gains are removed from
+	 * {@code rawGains} and the quantities are accumulated into
+	 * {@code expenseReversalsOut} for the caller to apply with
+	 * {@link com.coinflow.CoinFlowSession#withExpenseReversal}.
+	 */
+	public static void applyDropReconciliation(
+		Map<Integer, Integer> rawGains,
+		Map<Integer, Integer> recentlyDroppedItems,
+		Map<Integer, Integer> recentlyDroppedOwnedItems,
+		Map<Integer, Integer> recentlyExpensedDrops,
+		Map<Integer, Long> expenseReversalsOut,
+		ItemManager itemManager)
+	{
+		if (rawGains.isEmpty())
+		{
+			return;
+		}
+
+		// 0. Reconcile expensed drops (Count Drops as Spent):
+		// The drop was charged to Spent, so the pickup reverses that charge rather than
+		// crediting a gain. Runs first so these never fall through to the legacy maps.
+		if (recentlyExpensedDrops != null && !recentlyExpensedDrops.isEmpty())
+		{
+			for (Map.Entry<Integer, Integer> entry : new ArrayList<>(rawGains.entrySet()))
+			{
+				int rawId = entry.getKey();
+				int gainQty = entry.getValue();
+				int canonicalId = itemManager != null ? itemManager.canonicalize(rawId) : rawId;
+
+				int pending = recentlyExpensedDrops.getOrDefault(canonicalId, 0);
+				int keyToUse = canonicalId;
+				if (pending == 0 && canonicalId != rawId)
+				{
+					pending = recentlyExpensedDrops.getOrDefault(rawId, 0);
+					keyToUse = rawId;
+				}
+
+				if (pending > 0)
+				{
+					int match = Math.min(gainQty, pending);
+					if (pending <= match)
+					{
+						recentlyExpensedDrops.remove(keyToUse);
+					}
+					else
+					{
+						recentlyExpensedDrops.put(keyToUse, pending - match);
+					}
+
+					if (expenseReversalsOut != null)
+					{
+						expenseReversalsOut.merge(canonicalId, (long) match, Long::sum);
+					}
+
+					int remainingGain = gainQty - match;
+					if (remainingGain <= 0)
+					{
+						rawGains.remove(rawId);
+					}
+					else
+					{
+						rawGains.put(rawId, remainingGain);
+					}
+				}
+			}
+		}
+
 		if (rawGains.isEmpty())
 		{
 			return;

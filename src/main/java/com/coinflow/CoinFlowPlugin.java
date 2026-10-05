@@ -186,6 +186,12 @@ public class CoinFlowPlugin extends Plugin
 	final GrandExchangeTracker grandExchangeTracker = new GrandExchangeTracker();
 
 	/**
+	 * Reconciles inventory diffs while a standard coin shop is open: buys add
+	 * cost basis to the shared trade pool, sells settle against carried value.
+	 */
+	final ShopTracker shopTracker = new ShopTracker(grandExchangeTracker);
+
+	/**
 	 * Number of game ticks remaining to suppress diffing for in-flight items
 	 * arriving immediately upon or after interface closure (e.g. bank withdrawals).
 	 */
@@ -260,6 +266,12 @@ public class CoinFlowPlugin extends Plugin
 	final Map<Integer, Integer> recentlyDroppedOwnedItems = new HashMap<>();
 
 	/**
+	 * Items dropped while "Count Drops as Spent" was active. The drop was charged as a
+	 * supply expense; picking it back up reverses that expense instead of crediting a gain.
+	 */
+	final Map<Integer, Integer> recentlyExpensedDrops = new HashMap<>();
+
+	/**
 	 * Game tick when each item was dropped, used to expire stale drop records.
 	 */
 	final Map<Integer, Integer> droppedItemTicks = new HashMap<>();
@@ -288,6 +300,14 @@ public class CoinFlowPlugin extends Plugin
 	int lastLootingBagDepositItemId = -1;
 	String lastLootingBagDepositItemName = null;
 	int lastNotingServiceTick = -100;
+
+	/**
+	 * Canonical item id -> tick of the player's most recent "Drop" click. A loss
+	 * of that item within {@link #DROP_INTENT_WINDOW_TICKS} is a drop, not a
+	 * consumption, and is routed through the own-drop path instead of expensed.
+	 */
+	final Map<Integer, Integer> recentDropIntents = new HashMap<>();
+	static final int DROP_INTENT_WINDOW_TICKS = 2;
 
 	private static class TakeClick
 	{
@@ -498,7 +518,7 @@ public class CoinFlowPlugin extends Plugin
 			ItemContainer equipContainer = event.getItemContainer();
 			InventorySnapshot currentEquip = takeSnapshot(equipContainer);
 
-			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
+			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
 			{
 				previousEquipmentSnapshot = currentEquip;
 				pendingWornAmmoExpenses.clear();
@@ -750,8 +770,18 @@ public class CoinFlowPlugin extends Plugin
 							ItemComposition gainedComp = itemManager != null ? itemManager.getItemComposition(gainedId) : null;
 							String gainedName = gainedComp != null ? gainedComp.getName() : "";
 
+							// Potion dose steps and food portion transitions are also
+							// real inventory changes, not baseline noise — swallowing
+							// them would lose the first sip/bite after an interface.
+							ConsumableRegistry.PotionDose lostPotion = ConsumableRegistry.parsePotion(lostName);
+							ConsumableRegistry.PotionDose gainedPotion = ConsumableRegistry.parsePotion(gainedName);
+							boolean samePotionBase = lostPotion != null && gainedPotion != null
+								&& lostPotion.getBaseName().equalsIgnoreCase(gainedPotion.getBaseName());
+
 							if ((lostId == gainedId && !lostEntry.getKey().equals(gainedEntry.getKey()))
-								|| ProcessingPatternRegistry.match(lostName, gainedName, gainedEntry.getValue()) != null)
+								|| ProcessingPatternRegistry.match(lostName, gainedName, gainedEntry.getValue()) != null
+								|| samePotionBase
+								|| ConsumableRegistry.isFoodPortion(gainedName, lostName))
 							{
 								isProcessing = true;
 								break;
@@ -785,11 +815,43 @@ public class CoinFlowPlugin extends Plugin
 			}
 		}
 
+		// ── Shop open: route the diff through ShopTracker ────────────────
+		// The coins delta is the actual price paid/received. Entries the
+		// tracker does not reconcile (non-coin currencies, noise while the
+		// shop is open) are intentionally suppressed.
+		if (interfaceTracker.isShopOpen() && previousInventorySnapshot != null)
+		{
+			Map<Integer, Integer> shopGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
+			Map<Integer, Integer> shopLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+			applyGeLedger(
+				shopTracker.reconcileDiff(shopGains, shopLosses, session, itemManager, ignoredItemNames,
+					config.untrackedSalesAsIncome()),
+				ItemID.COINS);
+			previousInventorySnapshot = currentSnapshot;
+			return;
+		}
+
 		// ── Diff and process gains & expenses ─────────────────────────────
 		if (previousInventorySnapshot != null)
 		{
 			Map<Integer, Integer> rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
 			Map<Integer, Integer> rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+
+			// ── Dialogue purchase (Zaff, Ali Morrisane, etc.) ─────────────
+			// Coins were the only thing lost and non-coin items arrived in the
+			// same tick with no shop interface open: that is a purchase, not
+			// loot. Route it through ShopTracker for basis so the cash does not
+			// vanish while the goods show up as profit.
+			if (isCoinsOnlyPurchase(rawGains, rawLosses))
+			{
+				applyGeLedger(
+					shopTracker.reconcileDiff(rawGains, rawLosses, session, itemManager, ignoredItemNames,
+						config.untrackedSalesAsIncome()),
+					ItemID.COINS);
+				log.debug("Dialogue purchase: {} gp for {}", rawLosses.get(ItemID.COINS), rawGains);
+				previousInventorySnapshot = currentSnapshot;
+				return;
+			}
 
 			if (!rawLosses.isEmpty() && hasLootingBag(invContainer))
 			{
@@ -864,17 +926,32 @@ public class CoinFlowPlugin extends Plugin
 				recentlyEquippedItems,
 				recentlyDroppedItems,
 				recentlyDroppedOwnedItems,
+				recentlyExpensedDrops,
 				previousEquipmentSnapshot,
 				currentEquipContainer,
 				session,
+				grandExchangeTracker,
 				itemManager,
 				config,
 				ignoredItemNames,
 				pendingWornAmmoExpenses,
 				matchedUnequipsThisTick
 			);
-
 			int currentTick = client != null ? client.getTickCount() : 0;
+			Set<Integer> liveDropIntents = expireDropIntents(currentTick);
+			if (!liveDropIntents.isEmpty())
+			{
+				for (int lostId : rawLosses.keySet())
+				{
+					int canonicalLost = itemManager != null ? itemManager.canonicalize(lostId) : lostId;
+					if (liveDropIntents.contains(canonicalLost))
+					{
+						context.getDropIntentIds().add(canonicalLost);
+						recentDropIntents.remove(canonicalLost);
+					}
+				}
+			}
+
 			if (client != null)
 			{
 				for (Map.Entry<Skill, Integer> entry : lastSkillXpTicks.entrySet())
@@ -976,6 +1053,10 @@ public class CoinFlowPlugin extends Plugin
 				{
 					droppedItemTicks.put(id, currentTick);
 				}
+				for (int id : context.getRecentlyExpensedDrops().keySet())
+				{
+					droppedItemTicks.put(id, currentTick);
+				}
 			}
 
 			// Pop gold drop for the positive profit margin (if profitable and meets threshold)
@@ -986,14 +1067,18 @@ public class CoinFlowPlugin extends Plugin
 				goldDropOverlay.addDrop(dropText, context.getAlchedItemRawId(), 0);
 			}
 
-			if (!context.getRawGains().isEmpty() || !context.getDroppedGainsDeductions().isEmpty() || !context.getSupplyExpenses().isEmpty())
+			if (!context.getRawGains().isEmpty() || !context.getDroppedGainsDeductions().isEmpty()
+				|| !context.getSupplyExpenses().isEmpty() || !context.getExpenseReversals().isEmpty())
 			{
+				session = session.markConsumed(context.getConsumedSessionQuantities());
+				session = session.withExpenseReversal(context.getExpenseReversals());
 				processGainsLossesAndExpenses(
 					context.getRawGains(),
 					context.getDroppedGainsDeductions(),
 					context.getSupplyExpenses(),
 					context.getAlchedDropItemId(),
-					context.getExemptProductIds()
+					context.getExemptProductIds(),
+					context.getBasisExcludedExpenseIds()
 				);
 
 				if (context.getActiveSkillingSkills().contains(Skill.FIREMAKING))
@@ -1065,6 +1150,7 @@ public class CoinFlowPlugin extends Plugin
 				return;
 			}
 			boolean trackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+				&& !interfaceTracker.isShopOpen()
 				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
 			weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
 				client.getTickCount());
@@ -1094,7 +1180,8 @@ public class CoinFlowPlugin extends Plugin
 			else
 			{
 				applyGeLedger(
-					grandExchangeTracker.settleSell(itemId, delta.quantityDelta, delta.coinsDelta, session),
+					grandExchangeTracker.settleSell(itemId, delta.quantityDelta, delta.coinsDelta, session,
+						config.untrackedSalesAsIncome()),
 					itemId);
 			}
 		}
@@ -1218,6 +1305,12 @@ public class CoinFlowPlugin extends Plugin
 		String target = rawTarget != null ? Text.removeTags(rawTarget).toLowerCase(Locale.ROOT) : "";
 		int tick = client != null ? client.getTickCount() : 0;
 
+		if ("Drop".equalsIgnoreCase(option) && event.getItemId() > 0)
+		{
+			int dropId = itemManager != null ? itemManager.canonicalize(event.getItemId()) : event.getItemId();
+			recentDropIntents.put(dropId, tick);
+		}
+
 		if ("Take".equalsIgnoreCase(option))
 		{
 			int itemId = event.getId();
@@ -1318,7 +1411,8 @@ public class CoinFlowPlugin extends Plugin
 				log.debug("Container/charged item action clicked ('{}' on '{}'), scheduling rebaseline", option, target);
 			}
 		}
-		else if (option.toLowerCase(Locale.ROOT).startsWith("collect"))
+		else if (option.toLowerCase(Locale.ROOT).startsWith("collect")
+			&& (interfaceTracker.isTrackingSuppressed() || target.toLowerCase(Locale.ROOT).contains("grand exchange")))
 		{
 			interfaceTracker.setNeedsRebaseline(true);
 			rebaselineGraceTicks = 3;
@@ -2422,7 +2516,7 @@ public class CoinFlowPlugin extends Plugin
 		// Finalize pending equipped ammo/thrown weapons consumed without inventory changes
 		if (!pendingWornAmmoExpenses.isEmpty())
 		{
-			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
+			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
 			{
 				pendingWornAmmoExpenses.clear();
 			}
@@ -2454,6 +2548,7 @@ public class CoinFlowPlugin extends Plugin
 
 		// Finalize pending charge-based supply costs (runes/scales/shards stored inside weapons)
 		boolean chargeTrackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+			&& !interfaceTracker.isShopOpen()
 			&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
 		if (client != null)
 		{
@@ -2577,6 +2672,7 @@ public class CoinFlowPlugin extends Plugin
 				{
 					recentlyDroppedItems.remove(entry.getKey());
 					recentlyDroppedOwnedItems.remove(entry.getKey());
+					recentlyExpensedDrops.remove(entry.getKey());
 					return true;
 				}
 				return false;
@@ -2932,12 +3028,6 @@ public class CoinFlowPlugin extends Plugin
 			return true;
 		}
 
-		Widget shopMain = client.getWidget(InterfaceID.Shopmain.FRAME);
-		if (shopMain != null && !shopMain.isHidden())
-		{
-			return true;
-		}
-
 		return false;
 	}
 
@@ -3147,8 +3237,11 @@ public class CoinFlowPlugin extends Plugin
 
 		// Re-picking up the player's own dropped items into an open bag/box/sack
 		// must not count as fresh profit — this path bypasses the handler chain.
+		Map<Integer, Long> expenseReversals = new HashMap<>();
 		com.coinflow.reconciliation.DroppedItemPickupHandler.applyDropReconciliation(
-			containerGains, recentlyDroppedItems, recentlyDroppedOwnedItems, itemManager);
+			containerGains, recentlyDroppedItems, recentlyDroppedOwnedItems, recentlyExpensedDrops,
+			expenseReversals, itemManager);
+		session = session.withExpenseReversal(expenseReversals);
 
 		if (!containerGains.isEmpty())
 		{
@@ -3196,17 +3289,32 @@ public class CoinFlowPlugin extends Plugin
 		processGainsLossesAndExpenses(rawGains, droppedGainsDeductions, supplyExpenses, alchedDropItemId, Collections.emptySet());
 	}
 
-	/**
-	 * Processes raw item gains, dropped item deductions, and supply expenses atomically:
-	 * looks up prices, updates the session, and triggers gold drops for positive gains,
-	 * skipping generic coins gold drop if an alchemy drop was already displayed.
-	 */
 	void processGainsLossesAndExpenses(
 		Map<Integer, Integer> rawGains,
 		Map<Integer, CoinFlowSession.TrackedItem> droppedGainsDeductions,
 		Map<Integer, CoinFlowSession.TrackedItem> supplyExpenses,
 		int alchedDropItemId,
 		Set<Integer> exemptProductIds)
+	{
+		processGainsLossesAndExpenses(rawGains, droppedGainsDeductions, supplyExpenses, alchedDropItemId,
+			exemptProductIds, Collections.emptySet());
+	}
+
+	/**
+	 * Processes raw item gains, dropped item deductions, and supply expenses atomically:
+	 * looks up prices, updates the session, and triggers gold drops for positive gains,
+	 * skipping generic coins gold drop if an alchemy drop was already displayed.
+	 *
+	 * @param fractionalExpenseIds expense ids excluded from whole-item cost basis
+	 *        repricing: dose/portion expenses and drop expenses
+	 */
+	void processGainsLossesAndExpenses(
+		Map<Integer, Integer> rawGains,
+		Map<Integer, CoinFlowSession.TrackedItem> droppedGainsDeductions,
+		Map<Integer, CoinFlowSession.TrackedItem> supplyExpenses,
+		int alchedDropItemId,
+		Set<Integer> exemptProductIds,
+		Set<Integer> fractionalExpenseIds)
 	{
 		Map<Integer, CoinFlowSession.TrackedItem> trackedGains = new HashMap<>();
 
@@ -3257,14 +3365,17 @@ public class CoinFlowPlugin extends Plugin
 			CoinFlowSession.TrackedItem trackedItem =
 				new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
 			trackedGains.merge(itemId, trackedItem,
-				(existing, added) -> existing.withAdditionalQuantity(added.getQuantity()));
+				(existing, added) -> existing.merge(added));
 
 			log.debug("Gained: {} x{} @ {} gp each = {} gp",
 				itemName, quantity, price, (long) quantity * price);
 		}
 
+		// Drain basis even when spent tracking is off so lots never outlive the items they priced
+		Map<Integer, CoinFlowSession.TrackedItem> repricedExpenses =
+			grandExchangeTracker.repriceFromBasis(supplyExpenses, fractionalExpenseIds);
 		Map<Integer, CoinFlowSession.TrackedItem> effectiveExpenses =
-			(config != null && !config.trackSpent()) ? Collections.emptyMap() : supplyExpenses;
+			(config != null && !config.trackSpent()) ? Collections.emptyMap() : repricedExpenses;
 
 		if (!trackedGains.isEmpty() || !droppedGainsDeductions.isEmpty() || !effectiveExpenses.isEmpty())
 		{
@@ -3380,6 +3491,7 @@ public class CoinFlowPlugin extends Plugin
 		gearSwapItemTicks.clear();
 		recentlyDroppedItems.clear();
 		recentlyDroppedOwnedItems.clear();
+		recentlyExpensedDrops.clear();
 		droppedItemTicks.clear();
 		recentTakeClicks.clear();
 		pendingLootingBagPickups.clear();
@@ -3414,6 +3526,7 @@ public class CoinFlowPlugin extends Plugin
 		lastLootingBagDepositItemId = -1;
 		lastLootingBagDepositItemName = null;
 		lastNotingServiceTick = -100;
+		recentDropIntents.clear();
 		rebaselineGraceTicks = 0;
 		lastPlayerLocation = null;
 		lastPlayerActivityTick = -100;
@@ -3424,9 +3537,21 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	/**
-	 * Resets the current session. Called from the panel or keybind.
+	 * Resets the current session. Called from the panel or keybind — possibly on
+	 * the Swing EDT — so the state mutation is marshalled onto the client
+	 * thread, where all other session/track bookkeeping runs.
 	 */
 	public void resetSession()
+	{
+		if (clientThread != null && (client == null || !client.isClientThread()))
+		{
+			clientThread.invokeLater(this::resetSessionOnClientThread);
+			return;
+		}
+		resetSessionOnClientThread();
+	}
+
+	private void resetSessionOnClientThread()
 	{
 		if (log.isDebugEnabled() && session != null)
 		{
@@ -3450,14 +3575,8 @@ public class CoinFlowPlugin extends Plugin
 		previousEquipmentSnapshot = null;
 		if (client != null && client.getGameState() == GameState.LOGGED_IN)
 		{
-			if (clientThread != null)
-			{
-				clientThread.invokeLater(this::takeBaseline);
-			}
-			else
-			{
-				takeBaseline();
-			}
+			// Already on the client thread by now — re-baseline immediately.
+			takeBaseline();
 		}
 		if (panel != null)
 		{
@@ -3478,6 +3597,41 @@ public class CoinFlowPlugin extends Plugin
 				overlay
 			));
 		}
+	}
+
+	/**
+	 * True when the diff is exactly "coins out, non-coin items in": the shape of
+	 * an NPC dialogue purchase. Any other loss (noting fee, processing input,
+	 * consumed supply) disqualifies it so those handlers keep ownership.
+	 */
+	static boolean isCoinsOnlyPurchase(Map<Integer, Integer> rawGains, Map<Integer, Integer> rawLosses)
+	{
+		if (rawLosses.size() != 1 || rawGains.isEmpty())
+		{
+			return false;
+		}
+		Integer coinsLost = rawLosses.get(ItemID.COINS);
+		if (coinsLost == null || coinsLost <= 0)
+		{
+			return false;
+		}
+		for (int gainedId : rawGains.keySet())
+		{
+			if (gainedId != ItemID.COINS)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Drops intents older than the window and returns the canonical ids still live.
+	 */
+	Set<Integer> expireDropIntents(int currentTick)
+	{
+		recentDropIntents.values().removeIf(t -> currentTick - t > DROP_INTENT_WINDOW_TICKS);
+		return new HashSet<>(recentDropIntents.keySet());
 	}
 
 	private void removeRecentlyUnequipped(int itemId, int quantity)

@@ -70,9 +70,31 @@ public class FoodPortionHandler implements ReconciliationHandler
 				long wholePrice = itemManager.getItemPrice(canonicalLostId);
 				int portionsInWhole = lostName.toLowerCase(java.util.Locale.ROOT).contains("cake") ? 3 : 2;
 				long portionPrice = Math.max(1L, wholePrice / portionsInWhole);
+
+				// Move purchase basis with the food: the eaten portion's share
+				// is expensed at cost, the rest stays on the leftover portion.
+				long basisCost = 0;
+				int basisPortions = 0;
+				com.coinflow.GrandExchangeTracker tracker = context.getGrandExchangeTracker();
+				if (tracker != null)
+				{
+					long[] result = tracker.reconcilePotionBasis(
+						java.util.Collections.singletonList(
+							new com.coinflow.GrandExchangeTracker.PotionBottle(canonicalLostId, portionsInWhole, portions)),
+						java.util.Collections.singletonList(
+							new com.coinflow.GrandExchangeTracker.PotionBottle(
+								itemManager.canonicalize(portionGainedId), portionsInWhole - 1, portions)),
+						portions);
+					basisCost = result[0];
+					basisPortions = (int) result[1];
+				}
+
+				long expenseTotal = basisCost
+					+ (long) Math.max(0, portions - basisPortions) * portionPrice;
 				String expenseName = lostName + " (portion)";
-				context.addSupplyExpense(canonicalLostId,
-					new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions, portionPrice));
+				context.addFractionalSupplyExpense(canonicalLostId,
+					new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions,
+						expenseTotal / portions));
 			}
 		}
 	}
