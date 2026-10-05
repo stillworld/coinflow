@@ -294,4 +294,28 @@ public interface CoinFlowConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "untrackedSalesAsIncome",
+		name = "Stock Sales as Income",
+		description = "Count proceeds from selling untracked (banked or pre-session) items at shops or the GE as income instead of a net-zero asset conversion",
+		section = advancedSection,
+		position = 4
+	)
+	default boolean untrackedSalesAsIncome()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "countDropsAsSpent",
+		name = "Count Drops as Spent",
+		description = "Record items you Drop as a supply expense (Spent) instead of deducting them from gross profit. Picking the item back up reverses the expense. Requires Track Spent.",
+		section = advancedSection,
+		position = 5
+	)
+	default boolean countDropsAsSpent()
+	{
+		return false;
+	}
 }

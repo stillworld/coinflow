@@ -938,7 +938,7 @@ public class CoinFlowPanel extends PluginPanel
 		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		if (itemManager != null)
 		{
-			AsyncBufferedImage image = itemManager.getImage(item.getItemId(), item.getQuantity(), item.getQuantity() > 1);
+			AsyncBufferedImage image = itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
 			if (image != null)
 			{
 				image.addTo(iconLabel);

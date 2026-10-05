@@ -26,39 +26,122 @@ public final class CoinFlowSession
 	{
 		private final int itemId;
 		private final String name;
-		private final int quantity;
+		private final long quantity;
 		private final long priceEach;
 		private final long totalValue;
+		/**
+		 * Quantity still owned/deductible — shrinks when the item is consumed,
+		 * sold, or dropped so already-spent gains are never deducted twice.
+		 */
+		private final long remainingQuantity;
+		/**
+		 * Historical credited value still held — may differ from
+		 * quantity * priceEach after price changes.
+		 */
+		private final long remainingValue;
 
-		public TrackedItem(int itemId, String name, int quantity, long priceEach)
+		public TrackedItem(int itemId, String name, long quantity, long priceEach)
+		{
+			this(itemId, name, quantity, priceEach, quantity * priceEach, quantity, quantity * priceEach);
+		}
+
+		private TrackedItem(int itemId, String name, long quantity, long priceEach,
+			long totalValue, long remainingQuantity, long remainingValue)
 		{
 			this.itemId = itemId;
 			this.name = name;
 			this.quantity = quantity;
 			this.priceEach = priceEach;
-			this.totalValue = (long) quantity * priceEach;
+			this.totalValue = totalValue;
+			this.remainingQuantity = remainingQuantity;
+			this.remainingValue = remainingValue;
 		}
 
 		public int getItemId() { return itemId; }
 		public String getName() { return name; }
-		public int getQuantity() { return quantity; }
+		public long getQuantity() { return quantity; }
 		public long getPriceEach() { return priceEach; }
 		public long getTotalValue() { return totalValue; }
+		public long getRemainingQuantity() { return remainingQuantity; }
+		public long getRemainingValue() { return remainingValue; }
 
 		/**
-		 * Returns a new TrackedItem with additional quantity added.
+		 * Returns a new TrackedItem with additional quantity added. Preserves the
+		 * historical credited value of the existing units — the new units are
+		 * valued at this item's (latest) price.
 		 */
-		public TrackedItem withAdditionalQuantity(int additionalQty)
+		public TrackedItem withAdditionalQuantity(long additionalQty)
 		{
-			return new TrackedItem(itemId, name, quantity + additionalQty, priceEach);
+			long addedValue = additionalQty * priceEach;
+			return new TrackedItem(itemId, name, quantity + additionalQty, priceEach,
+				totalValue + addedValue, remainingQuantity + additionalQty, remainingValue + addedValue);
 		}
 
 		/**
 		 * Returns a new TrackedItem with a specific quantity.
 		 */
-		public TrackedItem withQuantity(int newQty)
+		public TrackedItem withQuantity(long newQty)
 		{
 			return new TrackedItem(itemId, name, newQty, priceEach);
+		}
+
+		/**
+		 * Returns a new TrackedItem after deductible units were sold/dropped.
+		 * Removes a proportional share of the carried (historical) value.
+		 */
+		TrackedItem withDeduction(long deducted)
+		{
+			long removedValue = remainingQuantity > 0
+				? remainingValue * deducted / remainingQuantity
+				: 0;
+			return new TrackedItem(itemId, name, quantity - deducted, priceEach,
+				totalValue - removedValue, remainingQuantity - deducted, remainingValue - removedValue);
+		}
+
+		/**
+		 * Merges another tracked entry of the same item into this one. The
+		 * display price stays at this (latest) entry's price, while the credited
+		 * and remaining values are summed exactly — historical acquisition cost
+		 * is never repriced at the newer unit price.
+		 */
+		public TrackedItem merge(TrackedItem other)
+		{
+			return new TrackedItem(itemId, name, quantity + other.quantity, priceEach,
+				totalValue + other.totalValue,
+				remainingQuantity + other.remainingQuantity, remainingValue + other.remainingValue);
+		}
+
+		/**
+		 * Returns a new TrackedItem after units were consumed in place (eaten,
+		 * drunk, burned). The credited gain stays on the ledger (it is offset by
+		 * the recorded expense), but the units can no longer be deducted again.
+		 */
+		TrackedItem withConsumption(long consumed)
+		{
+			long newRemaining = Math.max(0, remainingQuantity - consumed);
+			long newRemainingValue = remainingQuantity > 0
+				? remainingValue * newRemaining / remainingQuantity
+				: 0;
+			return new TrackedItem(itemId, name, quantity, priceEach,
+				totalValue, newRemaining, newRemainingValue);
+		}
+
+		/**
+		 * Inverse of {@link #withConsumption}: units previously marked consumed
+		 * are back in hand (an expensed drop was picked up), so they become
+		 * deductible again. Bounded by the quantity actually consumed.
+		 */
+		TrackedItem withRestoredConsumption(long restored)
+		{
+			long consumed = quantity - remainingQuantity;
+			long toRestore = Math.max(0, Math.min(restored, consumed));
+			if (toRestore == 0)
+			{
+				return this;
+			}
+			long restoredValue = Math.min(toRestore * priceEach, totalValue - remainingValue);
+			return new TrackedItem(itemId, name, quantity, priceEach,
+				totalValue, remainingQuantity + toRestore, remainingValue + restoredValue);
 		}
 
 		@Override
@@ -320,7 +403,7 @@ public final class CoinFlowSession
 			if (existing != null)
 			{
 				// Call on gained so the current/latest market price is preserved (Fixes Bug 3)
-				updatedGains.put(itemId, gained.withAdditionalQuantity(existing.getQuantity()));
+				updatedGains.put(itemId, gained.merge(existing));
 			}
 			else
 			{
@@ -334,22 +417,25 @@ public final class CoinFlowSession
 		{
 			int itemId = entry.getKey();
 			TrackedItem dropped = entry.getValue();
-			int dropQty = dropped.getQuantity();
+			long dropQty = dropped.getQuantity();
 
 			TrackedItem existing = updatedGains.get(itemId);
 			if (existing != null)
 			{
-				int deductible = Math.min(dropQty, existing.getQuantity());
-				int newQty = existing.getQuantity() - deductible;
+				long deductible = Math.min(dropQty, existing.getRemainingQuantity());
+				long removedValue = existing.getRemainingQuantity() > 0
+					? existing.getRemainingValue() * deductible / existing.getRemainingQuantity()
+					: 0;
+				long newQty = existing.getQuantity() - deductible;
 				if (newQty > 0)
 				{
-					updatedGains.put(itemId, existing.withQuantity(newQty));
-					grossDelta -= (long) deductible * existing.getPriceEach();
+					updatedGains.put(itemId, existing.withDeduction(deductible));
+					grossDelta -= removedValue;
 				}
 				else
 				{
 					updatedGains.remove(itemId);
-					grossDelta -= existing.getTotalValue();
+					grossDelta -= existing.getRemainingValue();
 				}
 			}
 			// If existing == null, item was not gained in this session (e.g. brought from bank); do not penalize profit
@@ -367,7 +453,7 @@ public final class CoinFlowSession
 			if (existing != null)
 			{
 				// Call on expense so the current price is preserved
-				updatedExpenses.put(itemId, expense.withAdditionalQuantity(existing.getQuantity()));
+				updatedExpenses.put(itemId, expense.merge(existing));
 			}
 			else
 			{
@@ -387,6 +473,126 @@ public final class CoinFlowSession
 			this.activeTime,
 			this.totalInGameTime,
 			now,
+			this.lastTickTime,
+			false
+		);
+	}
+
+	/**
+	 * Returns a new session where the given item quantities are marked as consumed
+	 * in place (eaten, drunk, used). The credited gains stay on the ledger — they
+	 * are offset by the recorded expense — but those units can no longer be
+	 * deducted a second time when a pre-session item of the same id is dropped
+	 * or sold later.
+	 *
+	 * @param consumed map of itemId -> quantity consumed from session gains
+	 * @return new session snapshot with reduced deductible quantities
+	 */
+	public CoinFlowSession markConsumed(Map<Integer, Long> consumed)
+	{
+		if (consumed == null || consumed.isEmpty())
+		{
+			return this;
+		}
+
+		Map<Integer, TrackedItem> updatedGains = new HashMap<>(this.trackedItems);
+		for (Map.Entry<Integer, Long> entry : consumed.entrySet())
+		{
+			TrackedItem existing = updatedGains.get(entry.getKey());
+			if (existing != null && existing.getRemainingQuantity() > 0)
+			{
+				updatedGains.put(entry.getKey(), existing.withConsumption(entry.getValue()));
+			}
+		}
+
+		return new CoinFlowSession(
+			updatedGains,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			this.lastActivityTime,
+			this.lastTickTime,
+			this.idle
+		);
+	}
+
+	/**
+	 * Returns a new session where expensed drops have been picked back up.
+	 * The matching expense row is reduced by its proportional carried value
+	 * (removed entirely at zero quantity), and any session gain of the same
+	 * item that was marked consumed when it was dropped becomes deductible
+	 * again. Items with no expense row are ignored.
+	 *
+	 * @param reversals map of itemId -> quantity picked back up
+	 * @return new session snapshot with reduced expenses
+	 */
+	public CoinFlowSession withExpenseReversal(Map<Integer, Long> reversals)
+	{
+		if (reversals == null || reversals.isEmpty())
+		{
+			return this;
+		}
+
+		Map<Integer, TrackedItem> updatedExpenses = new HashMap<>(this.trackedExpenses);
+		Map<Integer, TrackedItem> updatedGains = new HashMap<>(this.trackedItems);
+		long reversedValue = 0L;
+		boolean changed = false;
+
+		for (Map.Entry<Integer, Long> entry : reversals.entrySet())
+		{
+			int itemId = entry.getKey();
+			long quantity = entry.getValue();
+			if (quantity <= 0)
+			{
+				continue;
+			}
+
+			TrackedItem expense = updatedExpenses.get(itemId);
+			if (expense != null && expense.getRemainingQuantity() > 0)
+			{
+				long deductible = Math.min(quantity, expense.getRemainingQuantity());
+				TrackedItem reduced = expense.withDeduction(deductible);
+				reversedValue += expense.getTotalValue() - reduced.getTotalValue();
+				if (reduced.getQuantity() > 0)
+				{
+					updatedExpenses.put(itemId, reduced);
+				}
+				else
+				{
+					updatedExpenses.remove(itemId);
+				}
+				changed = true;
+			}
+
+			TrackedItem gain = updatedGains.get(itemId);
+			if (gain != null)
+			{
+				TrackedItem restored = gain.withRestoredConsumption(quantity);
+				if (restored != gain)
+				{
+					updatedGains.put(itemId, restored);
+					changed = true;
+				}
+			}
+		}
+
+		if (!changed)
+		{
+			return this;
+		}
+
+		return new CoinFlowSession(
+			updatedGains,
+			updatedExpenses,
+			this.grossProfit,
+			this.totalExpenses - reversedValue,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			Instant.now(),
 			this.lastTickTime,
 			false
 		);

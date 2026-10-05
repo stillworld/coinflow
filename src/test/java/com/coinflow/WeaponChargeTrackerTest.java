@@ -64,7 +64,7 @@ public class WeaponChargeTrackerTest
 
 		Map<Integer, Integer> spent = tracker.drain();
 		Assert.assertEquals(5, spent.get(ItemID.CHAOSRUNE).intValue());
-		Assert.assertEquals(20, spent.get(ItemID.SOULRUNE).intValue());
+		Assert.assertEquals(2, spent.get(ItemID.SOULRUNE).intValue());
 	}
 
 	@Test

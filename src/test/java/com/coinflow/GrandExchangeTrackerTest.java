@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import net.runelite.api.GrandExchangeOffer;
@@ -272,6 +273,83 @@ public class GrandExchangeTrackerTest
 		Assert.assertEquals(0, tracker.basisQuantity(HELM));
 	}
 
+	// ── Supply repricing from basis ──────────────────────────────────────
+
+	private static Map<Integer, CoinFlowSession.TrackedItem> expense(int itemId, int qty, long priceEach)
+	{
+		Map<Integer, CoinFlowSession.TrackedItem> m = new java.util.HashMap<>();
+		m.put(itemId, new CoinFlowSession.TrackedItem(itemId, "Shark", qty, priceEach));
+		return m;
+	}
+
+	@Test
+	public void repriceFromBasis_noBasis_returnsInputUnchanged()
+	{
+		Map<Integer, CoinFlowSession.TrackedItem> in = expense(SHARK, 10, 1000);
+		Assert.assertSame(in, tracker.repriceFromBasis(in, Collections.<Integer>emptySet()));
+	}
+
+	@Test
+	public void repriceFromBasis_fullCoverage_chargesActualCostAndDrainsBasis()
+	{
+		// Bought 10 @ 1200 from a shop; market says 1000
+		tracker.addBasis(SHARK, 10, 12000);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(expense(SHARK, 10, 1000), Collections.<Integer>emptySet());
+
+		Assert.assertEquals(1200L, out.get(SHARK).getPriceEach());
+		Assert.assertEquals(12000L, out.get(SHARK).getTotalValue());
+		Assert.assertEquals(0, tracker.basisQuantity(SHARK));
+	}
+
+	@Test
+	public void repriceFromBasis_partialCoverage_averagesBasisAndMarket()
+	{
+		tracker.addBasis(SHARK, 4, 4800); // 1200 each
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(expense(SHARK, 10, 1000), Collections.<Integer>emptySet());
+
+		// 4 x 1200 + 6 x 1000 = 10800 -> 1080 each
+		Assert.assertEquals(1080L, out.get(SHARK).getPriceEach());
+		Assert.assertEquals(0, tracker.basisQuantity(SHARK));
+	}
+
+	@Test
+	public void repriceFromBasis_consumesFifoAndLeavesRemainder()
+	{
+		tracker.addBasis(SHARK, 10, 10000);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(expense(SHARK, 3, 500), Collections.<Integer>emptySet());
+
+		Assert.assertEquals(1000L, out.get(SHARK).getPriceEach());
+		Assert.assertEquals(7, tracker.basisQuantity(SHARK));
+	}
+
+	@Test
+	public void repriceFromBasis_fractionalExpense_skippedAndBasisKept()
+	{
+		// A 4-dose potion bought for 1200; one sip is recorded as qty=1 @ 300.
+		// Repricing must not treat that one dose as a whole potion.
+		tracker.addBasis(SHARK, 1, 1200);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(
+			expense(SHARK, 1, 300), Collections.singleton(SHARK));
+
+		Assert.assertEquals(300L, out.get(SHARK).getPriceEach());
+		Assert.assertEquals(1, tracker.basisQuantity(SHARK));
+	}
+
+	@Test
+	public void repriceFromBasis_otherItemsUntouched()
+	{
+		tracker.addBasis(HELM, 1, 50000);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(expense(SHARK, 10, 1000), Collections.<Integer>emptySet());
+
+		Assert.assertEquals(1000L, out.get(SHARK).getPriceEach());
+		Assert.assertEquals(1, tracker.basisQuantity(HELM));
+	}
+
 	// ── Sell settlement (carried-value decomposition) ────────────────────
 
 	@Test
@@ -285,6 +363,18 @@ public class GrandExchangeTrackerTest
 		Assert.assertEquals(HELM_TAX, tax(ledger.expenses).getQuantity());
 		Assert.assertEquals("GE Tax", tax(ledger.expenses).getName());
 		Assert.assertEquals(-HELM_TAX, ledger.netDelta);
+	}
+
+	@Test
+	public void settleSell_untrackedAsIncome_recordsNetProceedsAsGain()
+	{
+		GrandExchangeTracker.GeLedger ledger = tracker.settleSell(
+			HELM, 1, 59000, CoinFlowSession.createNew(), true);
+
+		Assert.assertEquals(59000 - HELM_TAX, coins(ledger.gains).getQuantity());
+		Assert.assertTrue(ledger.deductions.isEmpty());
+		Assert.assertTrue(ledger.expenses.isEmpty());
+		Assert.assertEquals(59000 - HELM_TAX, ledger.netDelta);
 	}
 
 	@Test
@@ -469,6 +559,88 @@ public class GrandExchangeTrackerTest
 	public void settleSell_zeroQuantity_returnsEmptyLedger()
 	{
 		Assert.assertTrue(tracker.settleSell(SHARK, 0, 0, CoinFlowSession.createNew()).isEmpty());
+	}
+
+	@Test
+	public void largeSale_preservesAllProceeds()
+	{
+		GrandExchangeTracker.GeLedger ledger = tracker.settleShopSell(
+			HELM, 2, 3_000_000_000L, CoinFlowSession.createNew(), true);
+		Assert.assertEquals(3_000_000_000L, coins(ledger.gains).getTotalValue());
+		Assert.assertEquals(3_000_000_000L, ledger.netDelta);
+	}
+
+	// ── Potion dose basis ────────────────────────────────────────────────
+
+	private static final int POTION4 = 3008;
+	private static final int POTION3 = 3010;
+	private static final int POTION2 = 3012;
+	private static final int POTION1 = 3014;
+
+	private static GrandExchangeTracker.PotionBottle bottle(int itemId, int doses, int qty)
+	{
+		return new GrandExchangeTracker.PotionBottle(itemId, doses, qty);
+	}
+
+	@Test
+	public void potionBasis_sipTransfersRetainedCostToLowerDoseForm()
+	{
+		tracker.addBasis(POTION4, 1, 188);
+
+		long[] result = tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION4, 4, 1)),
+			java.util.Arrays.asList(bottle(POTION3, 3, 1)), 1);
+
+		Assert.assertEquals(47L, result[0]); // 188 * 1/4 expensed at cost
+		Assert.assertEquals(1L, result[1]);  // the consumed dose was basis-covered
+		Assert.assertEquals(0, tracker.basisQuantity(POTION4));
+		Assert.assertEquals(1, tracker.basisQuantity(POTION3));
+	}
+
+	@Test
+	public void potionBasis_fullyDrunkBottle_doesNotTaintLaterSale()
+	{
+		// Buy Energy potion(4) for 188, drink all four doses, then sell a
+		// different pre-session bottle for 180 with untracked-as-income on:
+		// the drunk bottle's basis must be gone so the sale is pure income.
+		tracker.addBasis(POTION4, 1, 188);
+		long consumed = 0;
+		consumed += tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION4, 4, 1)),
+			java.util.Arrays.asList(bottle(POTION3, 3, 1)), 1)[0];
+		consumed += tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION3, 3, 1)),
+			java.util.Arrays.asList(bottle(POTION2, 2, 1)), 1)[0];
+		consumed += tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION2, 2, 1)),
+			java.util.Arrays.asList(bottle(POTION1, 1, 1)), 1)[0];
+		consumed += tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION1, 1, 1)),
+			java.util.Collections.emptyList(), 1)[0];
+
+		Assert.assertEquals(188L, consumed);
+		Assert.assertEquals(0, tracker.basisQuantity(POTION1));
+
+		GrandExchangeTracker.GeLedger ledger = tracker.settleSell(
+			POTION4, 1, 180, CoinFlowSession.createNew(), true);
+		long net = GrandExchangeTax.netProceeds(POTION4, 1, 180);
+		Assert.assertEquals(net, ledger.netDelta);
+		Assert.assertEquals(net, coins(ledger.gains).getTotalValue());
+	}
+
+	@Test
+	public void potionBasis_decant_movesCostToNewDoseForms()
+	{
+		// Two bought 3-dose bottles decanted into 4-dose + 2-dose: cost follows
+		// the liquid; nothing is expensed.
+		tracker.addBasis(POTION3, 2, 282);
+		long[] result = tracker.reconcilePotionBasis(
+			java.util.Arrays.asList(bottle(POTION3, 3, 2)),
+			java.util.Arrays.asList(bottle(POTION4, 4, 1), bottle(POTION2, 2, 1)), 0);
+
+		Assert.assertEquals(0L, result[0]);
+		Assert.assertEquals(1, tracker.basisQuantity(POTION4));
+		Assert.assertEquals(1, tracker.basisQuantity(POTION2));
 	}
 
 	@Test

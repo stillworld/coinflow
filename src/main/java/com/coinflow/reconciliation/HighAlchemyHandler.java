@@ -136,7 +136,7 @@ public class HighAlchemyHandler implements ReconciliationHandler
 				CoinFlowSession.TrackedItem sessionDrop = session.getTrackedItems().get(canonicalLostId);
 				if (sessionDrop != null)
 				{
-					availableInSession = sessionDrop.getQuantity();
+					availableInSession = (int) Math.min(Integer.MAX_VALUE, sessionDrop.getRemainingQuantity());
 				}
 			}
 

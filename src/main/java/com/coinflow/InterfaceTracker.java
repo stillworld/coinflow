@@ -47,8 +47,6 @@ public class InterfaceTracker
 		InterfaceID.TRADEMAIN,
 		InterfaceID.TRADESIDE,
 		InterfaceID.TRADECONFIRM,
-		InterfaceID.SHOPMAIN,
-		InterfaceID.SHOPSIDE,
 		InterfaceID.OMNISHOP_MAIN,
 		InterfaceID.OMNISHOP_SIDE,
 		InterfaceID.PVP_STORE,
@@ -88,6 +86,16 @@ public class InterfaceTracker
 		InterfaceID.DEADMANLOOT
 	)));
 
+	// ── Coin-shop interface IDs tracked as an open-shop state ────────────
+	// Standard NPC shops transact in coins and produce usable inventory
+	// diffs, so they are NOT suppressed: diffs are routed to ShopTracker
+	// instead. Omnishop/reward-shop interfaces stay suppressed since many
+	// use non-coin currencies or points.
+	static final Set<Integer> SHOP_INTERFACES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+		InterfaceID.SHOPMAIN,
+		InterfaceID.SHOPSIDE
+	)));
+
 	// ── Side interface IDs that represent inventory side panels ──────────
 	static final Set<Integer> SIDE_INTERFACES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
 		InterfaceID.BANKSIDE,
@@ -115,6 +123,9 @@ public class InterfaceTracker
 	private final Set<Integer> openSuppressedInterfaces = new HashSet<>();
 
 	@Getter
+	private final Set<Integer> openShopInterfaces = new HashSet<>();
+
+	@Getter
 	@Setter
 	private boolean trackingSuppressed = false;
 
@@ -135,9 +146,20 @@ public class InterfaceTracker
 	public void reset(GameState currentGameState)
 	{
 		openSuppressedInterfaces.clear();
+		openShopInterfaces.clear();
 		trackingSuppressed = false;
 		needsRebaseline = false;
 		previousGameState = currentGameState != null ? currentGameState : GameState.UNKNOWN;
+	}
+
+	/**
+	 * Returns true while a standard coin shop interface is open. Shop diffs are
+	 * routed to ShopTracker rather than suppressed or passed to the normal
+	 * reconciliation pipeline.
+	 */
+	public boolean isShopOpen()
+	{
+		return !openShopInterfaces.isEmpty();
 	}
 
 	public void onWidgetLoaded(int groupId)
@@ -145,13 +167,27 @@ public class InterfaceTracker
 		if (groupId == InterfaceID.INVENTORY)
 		{
 			// Returning to regular inventory tab clears any leftover side-panel interfaces
+			boolean wasShopOpen = !openShopInterfaces.isEmpty();
 			openSuppressedInterfaces.removeAll(SIDE_INTERFACES);
+			openShopInterfaces.removeAll(SIDE_INTERFACES);
 			if (openSuppressedInterfaces.isEmpty() && trackingSuppressed)
 			{
 				trackingSuppressed = false;
 				needsRebaseline = true;
 				log.debug("Inventory tab restored, all suppressed interfaces closed; will re-baseline");
 			}
+			if (wasShopOpen && openShopInterfaces.isEmpty())
+			{
+				needsRebaseline = true;
+				log.debug("Shop side panel cleared with inventory tab; will re-baseline");
+			}
+			return;
+		}
+
+		if (SHOP_INTERFACES.contains(groupId))
+		{
+			openShopInterfaces.add(groupId);
+			log.debug("Shop interface opened (group {}), routing diffs to shop tracking", groupId);
 			return;
 		}
 
@@ -173,6 +209,15 @@ public class InterfaceTracker
 				needsRebaseline = true;
 				log.debug("All suppressed interfaces closed, will re-baseline on next inventory event");
 			}
+		}
+
+		// No re-baseline on shop close: the shop branch advances the inventory
+		// snapshot on every tick while open, so the baseline is already current.
+		// Scheduling one here would swallow the first real post-shop diff (e.g.
+		// a drop), leaving the subsequent pickup to be counted as new loot.
+		if (openShopInterfaces.remove(groupId) && openShopInterfaces.isEmpty())
+		{
+			log.debug("Shop interface closed, resuming normal inventory tracking");
 		}
 	}
 
@@ -197,6 +242,7 @@ public class InterfaceTracker
 			}
 
 			openSuppressedInterfaces.clear();
+			openShopInterfaces.clear();
 			trackingSuppressed = false;
 		}
 		else if (state == GameState.LOADING)
@@ -207,6 +253,7 @@ public class InterfaceTracker
 		{
 			needsRebaseline = true;
 			openSuppressedInterfaces.clear();
+			openShopInterfaces.clear();
 			trackingSuppressed = false;
 			log.debug("Game state -> {}, pausing tracking", state);
 		}
