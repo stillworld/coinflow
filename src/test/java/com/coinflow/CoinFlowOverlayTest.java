@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
@@ -10,6 +11,8 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import java.time.Duration;
+import net.runelite.client.ui.overlay.components.ComponentConstants;
+import net.runelite.client.ui.overlay.components.LineComponent;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -31,6 +34,8 @@ public class CoinFlowOverlayTest
 		graphics = img.createGraphics();
 
 		when(config.showOverlay()).thenReturn(true);
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.DETAILED);
+		when(config.showOverlayBackground()).thenReturn(true);
 		when(config.trackSpent()).thenReturn(true);
 		when(config.showGoalOverlay()).thenReturn(false);
 		when(config.goalAmount()).thenReturn("");
@@ -152,6 +157,124 @@ public class CoinFlowOverlayTest
 		Assert.assertEquals("05:30 (paused)", CoinFlowOverlay.formatTimeRight(d, true, false));
 		// Idle with includeAfk = true -> idle
 		Assert.assertEquals("05:30 (idle)", CoinFlowOverlay.formatTimeRight(d, true, true));
+	}
+
+	@Test
+	public void render_singleLine_rendersOneLineComponent()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+		Assert.assertEquals(1, overlay.getPanelComponent().getChildren().size());
+		Assert.assertTrue(overlay.getPanelComponent().getChildren().get(0) instanceof LineComponent);
+	}
+
+	@Test
+	public void render_singleLine_ignoresUserResizedPreferredSize()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		CoinFlowSession session = CoinFlowSession.createNew();
+		when(plugin.getSession()).thenReturn(session);
+
+		// Simulate a saved Alt+drag resize narrower than the text; a stale saved
+		// size must not force the line to wrap.
+		overlay.setPreferredSize(new Dimension(40, 0));
+		// PanelComponent returns the size measured on the previous pass, so render
+		// once to populate it, then assert on the second render.
+		overlay.render(graphics);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		String expectedText = CoinFlowOverlay.formatCompactGpPerHour(session.getGpPerHour(false));
+		Assert.assertEquals("Single-line overlay must size to the text, not the saved overlay size",
+			graphics.getFontMetrics().stringWidth(expectedText) + 16, result.width);
+		Assert.assertEquals("Single-line overlay must render exactly one line tall",
+			graphics.getFontMetrics().getHeight() + 8, result.height);
+	}
+
+	@Test
+	public void render_singleLine_disablesResize_detailedKeepsResizable()
+	{
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		overlay.render(graphics);
+		Assert.assertFalse("Single-line mode must hide resize handles", overlay.isResizable());
+
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.DETAILED);
+		overlay.render(graphics);
+		Assert.assertTrue("Detailed mode must stay resizable", overlay.isResizable());
+	}
+
+	@Test
+	public void render_singleLine_hiddenWhenShowOverlayFalse()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(config.showOverlay()).thenReturn(false);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		Assert.assertNull(overlay.render(graphics));
+	}
+
+	@Test
+	public void render_singleLine_hiddenWhenSessionNull()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(plugin.getSession()).thenReturn(null);
+
+		Assert.assertNull(overlay.render(graphics));
+	}
+
+	@Test
+	public void render_singleLine_idle_rendersOneLine()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew().tick(0));
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+		Assert.assertEquals(1, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void formatCompactGpPerHour_formats()
+	{
+		Assert.assertEquals("0 gp/hr", CoinFlowOverlay.formatCompactGpPerHour(0));
+		Assert.assertEquals("721 gp/hr", CoinFlowOverlay.formatCompactGpPerHour(721));
+		Assert.assertEquals("-50 gp/hr", CoinFlowOverlay.formatCompactGpPerHour(-50));
+		Assert.assertEquals("1.5M gp/hr", CoinFlowOverlay.formatCompactGpPerHour(1_500_000));
+	}
+
+	@Test
+	public void render_backgroundToggle_controlsPanelBackground()
+	{
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		when(config.showOverlayBackground()).thenReturn(false);
+		overlay.render(graphics);
+		Assert.assertNull(overlay.getPanelComponent().getBackgroundColor());
+
+		when(config.showOverlayBackground()).thenReturn(true);
+		overlay.render(graphics);
+		Assert.assertEquals(ComponentConstants.STANDARD_BACKGROUND_COLOR,
+			overlay.getPanelComponent().getBackgroundColor());
+	}
+
+	@Test
+	public void render_singleLine_backgroundDisabled_preferredColorNotApplied()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(config.showOverlayBackground()).thenReturn(false);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+		overlay.setPreferredColor(Color.RED);
+
+		overlay.render(graphics);
+		Assert.assertNull("Preferred color must not resurrect a disabled background",
+			overlay.getPanelComponent().getBackgroundColor());
 	}
 
 	@Test
