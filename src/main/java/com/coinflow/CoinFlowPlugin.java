@@ -3602,7 +3602,8 @@ public class CoinFlowPlugin extends Plugin
 	/**
 	 * True when the diff is exactly "coins out, non-coin items in": the shape of
 	 * an NPC dialogue purchase. Any other loss (noting fee, processing input,
-	 * consumed supply) disqualifies it so those handlers keep ownership.
+	 * consumed supply) disqualifies it so those handlers keep ownership. Coins
+	 * exchanged only for platinum tokens is a currency conversion, not a buy.
 	 */
 	static boolean isCoinsOnlyPurchase(Map<Integer, Integer> rawGains, Map<Integer, Integer> rawLosses)
 	{
@@ -3617,7 +3618,7 @@ public class CoinFlowPlugin extends Plugin
 		}
 		for (int gainedId : rawGains.keySet())
 		{
-			if (gainedId != ItemID.COINS)
+			if (gainedId != ItemID.COINS && gainedId != ItemID.PLATINUM)
 			{
 				return true;
 			}

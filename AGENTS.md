@@ -28,8 +28,8 @@
 - `InventoryReconciliationEngine.java`: Orchestrator running diffs through prioritized handlers until reconciled.
 - `PotionDoseHandler.java`: Reconciles multi-dose potions (4->3->2->1 dose, empty vial creation).
 - `FoodPortionHandler.java`: Reconciles multi-bite foods (pies, pizzas, cakes) and single-bite meals.
-- `ConsumablesAndDropsHandler.java`: Reconciles ground drops, monster loot, and single-use consumables.
-- `ChargeDegradationHandler.java`: Reconciles weapon/armor charge degradation (Barrows, crystal, charged staves/blowpipe).
+- `ConsumablesAndDropsHandler.java`: Reconciles ground drops, monster loot, and single-use consumables. Residual coin/platinum losses that survive the specialist handlers are cash spends (fees, fares, repairs, coffers) expensed at face value and retire matching session coin gains (like consumables) — they never enter drop bookkeeping, which would otherwise suppress later coin pickups. Intentional coin drops (Drop-intent) keep the own-drop path. Banker coin<->platinum exchanges (1:1000) are netted out first; `isCoinsOnlyPurchase` ignores platinum-only gains so exchanges aren't treated as purchases.
+- `ChargeDegradationHandler.java`: Reconciles charge/degrade-state changes on the same item in both directions: usage degradation (Barrows 100->75->50->25->0, jewelry (n)->(n-1)), depletion to uncharged, recharges ((n)->(m), uncharged->(m)), Barrows repairs ("X 50" -> "X"), and first-use init ("X" -> "X 100"). Item sides cancel; any coin fee is left for the cash-spend path. Single-step usage transitions (`isUsageStepPair`) are preferred over broad recharge/repair matches so same-base loot in the same tick survives; Drop-intent losses are never paired; the bare-name Barrows direction is limited to the six brothers' gear.
 - `GearSwapHandler.java`: Reconciles inventory <-> equipment swaps (net 0 GP change).
 - `HighAlchemyHandler.java`: Reconciles High/Low Alchemy casts (alched item + runes consumed -> coins added).
 - `DroppedItemPickupHandler.java`: Distinguishes picking up player's own dropped items vs newly spawned ground items.

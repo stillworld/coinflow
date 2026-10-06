@@ -1224,6 +1224,82 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
 	}
 
+	// ── Cash spends ─────────────────────────────────────────────────────
+
+	/**
+	 * A coins-only loss (fee, fare, repair, coffer) is a supply expense, not an
+	 * owned drop — and must never enter the drop bookkeeping that suppresses
+	 * future coin pickups.
+	 */
+	@Test
+	public void coinsOnlyLoss_recordsExpense_neverDropBookkeeping()
+	{
+		int coinsId = ItemID.COINS;
+		plugin.previousInventorySnapshot = snapshot(coinsId, 50000);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, coinsId, 20000)));
+
+		Assert.assertEquals(30000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(coinsId));
+		Assert.assertFalse(plugin.recentlyDroppedItems.containsKey(coinsId));
+	}
+
+	/**
+	 * Regression: repairing Barrows gear at a POH armour stand. The degraded
+	 * variants leave and the repaired items arrive with a coin fee — the item
+	 * transition is asset-neutral and only the fee is spent.
+	 */
+	@Test
+	public void armourStandBarrowsRepair_expensesFee_noPhantomProfit()
+	{
+		int platebodyDegraded = 50001;
+		int platebody = 50002;
+		int chainskirtDegraded = 50003;
+		int chainskirt = 50004;
+		int coinsId = ItemID.COINS;
+
+		stubTrackableItem(platebodyDegraded, "Guthan's platebody 100", 150000L);
+		stubTrackableItem(platebody, "Guthan's platebody", 184122L);
+		stubTrackableItem(chainskirtDegraded, "Guthan's chainskirt 100", 160000L);
+		stubTrackableItem(chainskirt, "Guthan's chainskirt", 195100L);
+
+		plugin.previousInventorySnapshot = snapshot(
+			platebodyDegraded, 1, chainskirtDegraded, 1, coinsId, 100000);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, platebody, 1, chainskirt, 1, coinsId, 87242)));
+
+		Assert.assertEquals("Repaired items must not count as profit",
+			0L, plugin.session.getGrossProfit());
+		Assert.assertEquals("The 12,758 gp repair fee must be expensed",
+			12758L, plugin.session.getTotalExpenses());
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(platebodyDegraded));
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(chainskirtDegraded));
+	}
+
+	@Test
+	public void coinsToPlatinumExchange_isNotAPurchaseOrSpend()
+	{
+		int coinsId = ItemID.COINS;
+		int platId = ItemID.PLATINUM;
+		stubTrackableItem(platId, "Platinum token", 0L);
+		Assert.assertFalse(CoinFlowPlugin.isCoinsOnlyPurchase(
+			Collections.singletonMap(platId, 5), Collections.singletonMap(coinsId, 5000)));
+
+		plugin.previousInventorySnapshot = snapshot(coinsId, 5000);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, platId, 5)));
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
 	// ── Helpers ──────────────────────────────────────────────────────────
 
 	/**
