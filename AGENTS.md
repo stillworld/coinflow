@@ -10,7 +10,7 @@
 - `CoinFlowConfig.java`: Configuration options (`@ConfigGroup("coinflow")`), display toggles, goal mode thresholds.
 - `CoinFlowSession.java`: Active session state; records net GP, gold/hour rates, elapsed time, milestones, goal targets.
 - `CoinFlowPanel.java`: Swing sidebar panel; displays session metrics, item transaction breakdown, reset button.
-- `CoinFlowOverlay.java`: Draggable HUD overlay displaying net profit, GP/hr, and goal progress.
+- `CoinFlowOverlay.java`: Draggable HUD overlay displaying net profit, GP/hr, and goal progress. The `overlayStyle` config (`Detailed`/`Single Line`) switches to a compact one-line `X gp/hr` display; `showOverlayBackground` toggles the panel background (set `STANDARD_BACKGROUND_COLOR` or `null` each frame — the exact constant is required so RuneLite's global "Overlay Color" substitution still works). Single-line mode renders `panelComponent` directly rather than via `OverlayPanel.render()` so a persisted overlay resize (`getPreferredSize()`) cannot stretch or wrap the line, and calls `setResizable(false)` while active.
 - `CoinFlowGoldDropOverlay.java`: Floating canvas overlay showing animated `+GP` / `-GP` drop indicators on changes.
 - `InventorySnapshot.java`: Immutable value object capturing inventory/equipment items, quantities, and GE/HA valuations.
 - `InventorySnapshotService.java`: Compares tick-over-tick snapshots and emits net item diffs for reconciliation.

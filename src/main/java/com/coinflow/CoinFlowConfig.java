@@ -11,12 +11,33 @@ public interface CoinFlowConfig extends Config
 {
 	String CONFIG_GROUP = "coin-flow";
 
+	// ── General Section ──────────────────────────────────────────────────
+
+	@ConfigSection(
+		name = "General",
+		description = "General tracking settings",
+		position = 0
+	)
+	String generalSection = "general";
+
+	@ConfigItem(
+		keyName = "trackSpent",
+		name = "Track Spent",
+		description = "Track supply costs and expenses, deducting them from profit (disable for gross tracking)",
+		section = generalSection,
+		position = 0
+	)
+	default boolean trackSpent()
+	{
+		return true;
+	}
+
 	// ── Display Section ──────────────────────────────────────────────────
 
 	@ConfigSection(
-		name = "General & Display",
-		description = "General tracking and overlay display settings",
-		position = 0
+		name = "Display",
+		description = "Overlay, side panel, and gold drop display settings",
+		position = 1
 	)
 	String displaySection = "display";
 
@@ -32,14 +53,45 @@ public interface CoinFlowConfig extends Config
 		return true;
 	}
 
+	enum OverlayStyle
+	{
+		DETAILED("Detailed"),
+		SINGLE_LINE("Single Line");
+
+		private final String name;
+
+		OverlayStyle(String name)
+		{
+			this.name = name;
+		}
+
+		@Override
+		public String toString()
+		{
+			return name;
+		}
+	}
+
 	@ConfigItem(
-		keyName = "trackSpent",
-		name = "Track Spent",
-		description = "Track supply costs and expenses, deducting them from profit (disable for gross tracking)",
+		keyName = "overlayStyle",
+		name = "Overlay Style",
+		description = "Detailed shows profit, spent, GP/hr, time and goal progress; Single Line shows only the GP/hr rate",
 		section = displaySection,
 		position = 1
 	)
-	default boolean trackSpent()
+	default OverlayStyle overlayStyle()
+	{
+		return OverlayStyle.DETAILED;
+	}
+
+	@ConfigItem(
+		keyName = "showOverlayBackground",
+		name = "Overlay Background",
+		description = "Draw the panel background behind the overlay (disable for text only)",
+		section = displaySection,
+		position = 2
+	)
+	default boolean showOverlayBackground()
 	{
 		return true;
 	}
@@ -49,7 +101,7 @@ public interface CoinFlowConfig extends Config
 		name = "Show Item Breakdown",
 		description = "Show per-item breakdown in the side panel",
 		section = displaySection,
-		position = 2
+		position = 3
 	)
 	default boolean showItemBreakdown()
 	{
@@ -61,7 +113,7 @@ public interface CoinFlowConfig extends Config
 		name = "Compact Mode",
 		description = "Display a streamlined, compact view in the side panel",
 		section = displaySection,
-		position = 3
+		position = 4
 	)
 	default boolean compactMode()
 	{
@@ -73,7 +125,7 @@ public interface CoinFlowConfig extends Config
 		name = "Show Gold Drops",
 		description = "Display floating gold drops when gaining profit",
 		section = displaySection,
-		position = 4
+		position = 5
 	)
 	default boolean showGoldDrops()
 	{
@@ -104,7 +156,7 @@ public interface CoinFlowConfig extends Config
 		name = "Drop Position",
 		description = "Where to display floating gold drops on screen",
 		section = displaySection,
-		position = 5
+		position = 6
 	)
 	default GoldDropPosition goldDropPosition()
 	{
@@ -116,7 +168,7 @@ public interface CoinFlowConfig extends Config
 		name = "Min Gold Drop (GP)",
 		description = "Minimum GP value required to trigger an in-game gold drop (0 to show all)",
 		section = displaySection,
-		position = 6
+		position = 7
 	)
 	@Range(min = 0)
 	default int goldDropMinThreshold()
@@ -162,7 +214,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigSection(
 		name = "Goal",
 		description = "Target GP goals and countdown settings",
-		position = 1
+		position = 2
 	)
 	String goalSection = "goal";
 
@@ -219,7 +271,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigSection(
 		name = "Reporting",
 		description = "Reporting settings",
-		position = 2,
+		position = 3,
 		closedByDefault = true
 	)
 	String reportingSection = "reporting";
@@ -241,7 +293,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigSection(
 		name = "Advanced",
 		description = "Advanced tracking settings",
-		position = 3,
+		position = 4,
 		closedByDefault = true
 	)
 	String advancedSection = "advanced";

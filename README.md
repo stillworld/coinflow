@@ -10,7 +10,7 @@ Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inv
 
 ## Features
 
-- **Live Overlay & GP/hr:** Lightweight on-screen display showing your net profit, current GP/hr, session timer, and goal progress.
+- **Live Overlay & GP/hr:** Lightweight on-screen display showing your net profit, current GP/hr, session timer, and goal progress. Switch to a minimal single-line `gp/hr` style with an optional transparent background for an out-of-the-way display.
 - **Net Profit & Supply Tracking:** Optionally tracks consumed supplies (food bites, potion doses, ammo, runes, etc.) so you see actual profit rather than just raw loot value.
 - **Floating Gold Drops:** Floating "+GP" drops (like XP drops) when you get loot or make money. Can appear overhead or in the top-right corner.
 - **Sidebar Panel:** Side panel showing your session breakdown, per-item gains and losses with current GE prices, and a quick reset button.
@@ -20,7 +20,7 @@ Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inv
 ## Configuration
 
 You can configure Coin Flow in the standard RuneLite plugin settings:
-- **Display:** Toggle the overlay, side panel compact mode, and gold drop styles/positions.
+- **Display:** Toggle the overlay, pick a detailed or single-line overlay style, show or hide the overlay background, and configure side panel compact mode and gold drop styles/positions.
 - **Thresholds:** Set a minimum GP value for floating gold drops so small items don't clutter the screen.
 - **Supplies:** Turn supply cost deduction on or off depending on whether you want gross or net profit.
 - **Ignored Items:** Add comma-separated items you don't want tracked (e.g. `Vial, Jug, Bones`).

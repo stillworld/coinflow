@@ -10,6 +10,7 @@ import net.runelite.api.MenuAction;
 import net.runelite.client.ui.overlay.OverlayMenuEntry;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
+import net.runelite.client.ui.overlay.components.ComponentConstants;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.ProgressBarComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
@@ -61,6 +62,21 @@ public class CoinFlowOverlay extends OverlayPanel
 
 		boolean includeAfk = config.includeAfkTime();
 		boolean isIdle = session.isIdle();
+
+		// Use the standard color (not a copy) when the background is enabled so
+		// OverlayPanel's preferred-color substitution (the global "Overlay Color"
+		// setting) still applies; null keeps the panel fully transparent.
+		panelComponent.setBackgroundColor(config.showOverlayBackground()
+			? ComponentConstants.STANDARD_BACKGROUND_COLOR
+			: null);
+
+		boolean singleLine = config.overlayStyle() == CoinFlowConfig.OverlayStyle.SINGLE_LINE;
+		// A resized overlay's saved size is ignored in single-line mode, so hide the resize handles.
+		setResizable(!singleLine);
+		if (singleLine)
+		{
+			return renderSingleLine(graphics, session, isIdle, includeAfk);
+		}
 
 		FontMetrics fontMetrics = graphics.getFontMetrics();
 		int maxLineWidth = MIN_PANEL_WIDTH;
@@ -171,6 +187,55 @@ public class CoinFlowOverlay extends OverlayPanel
 		panelComponent.setPreferredSize(new Dimension(maxLineWidth + PANEL_PADDING, 0));
 
 		return super.render(graphics);
+	}
+
+	/**
+	 * Renders the compact single-line "GP/hr" display.
+	 *
+	 * Renders {@link #panelComponent} directly instead of via {@code super.render()} so a
+	 * saved overlay resize ({@code getPreferredSize()}) cannot force a stale width that
+	 * would stretch the background or wrap the line. Mirrors OverlayPanel's
+	 * preferred-color swap so the global "Overlay Color" setting still applies.
+	 */
+	private Dimension renderSingleLine(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk)
+	{
+		long gpPerHour = config.trackSpent() ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
+		String text = formatCompactGpPerHour(gpPerHour);
+		Color color = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
+
+		FontMetrics fontMetrics = graphics.getFontMetrics();
+		panelComponent.setPreferredSize(new Dimension(fontMetrics.stringWidth(text) + PANEL_PADDING, 0));
+		panelComponent.getChildren().add(LineComponent.builder()
+			.left(text)
+			.leftColor(color)
+			.build());
+
+		Color background = panelComponent.getBackgroundColor();
+		if (background != null && getPreferredColor() != null)
+		{
+			panelComponent.setBackgroundColor(getPreferredColor());
+		}
+
+		try
+		{
+			return panelComponent.render(graphics);
+		}
+		finally
+		{
+			if (isClearChildren())
+			{
+				panelComponent.getChildren().clear();
+			}
+			panelComponent.setBackgroundColor(background);
+		}
+	}
+
+	/**
+	 * Formats the single-line overlay text, e.g. "721 gp/hr" or "-50 gp/hr".
+	 */
+	static String formatCompactGpPerHour(long gpPerHour)
+	{
+		return (gpPerHour < 0 ? "-" : "") + formatGp(Math.abs(gpPerHour)) + " gp/hr";
 	}
 
 	/**
