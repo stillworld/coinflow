@@ -265,4 +265,63 @@ public class ConsumableRegistryTest
 		ItemManager itemManager = mockItemManager(9004, "Rune pickaxe", "Wield", "Drop");
 		Assert.assertFalse(ConsumableRegistry.isConsumable(9004, "Rune pickaxe", itemManager));
 	}
+
+	@Test
+	public void isLastChargeTeleportJewelry_lastCharge_true()
+	{
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of dueling(1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Games necklace(1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Slayer ring (1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Necklace of passage(1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Burning amulet(1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Digsite pendant(1)"));
+		Assert.assertTrue(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of returning(1)"));
+	}
+
+	@Test
+	public void isLastChargeTeleportJewelry_notLastChargeOrNotCrumbling_false()
+	{
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of dueling(2)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Games necklace(8)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Amulet of glory(1)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of wealth (1)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Combat bracelet(1)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of recoil"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Ring of life"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry("Prayer potion(1)"));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry(null));
+		Assert.assertFalse(ConsumableRegistry.isLastChargeTeleportJewelry(""));
+	}
+
+	@Test
+	public void isCrumblingJewelry_crumblingItems_true()
+	{
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Ring of dueling(1)"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Games necklace(1)"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Castle wars bracelet(1)"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Ring of recoil"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Ring of life"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Binding necklace"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Dodgy necklace"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Bracelet of slaughter"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Expeditious bracelet"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Ring of forging"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Bracelet of clay"));
+		Assert.assertTrue(ConsumableRegistry.isCrumblingJewelry("Amulet of chemistry"));
+	}
+
+	@Test
+	public void isCrumblingJewelry_persistentOrPartialCharge_false()
+	{
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Ring of dueling(2)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Amulet of glory(1)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Combat bracelet(1)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Amulet of glory"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Amulet of eternal glory"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Ring of wealth (1)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Slayer ring (eternal)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry("Castle wars bracelet(2)"));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry(null));
+		Assert.assertFalse(ConsumableRegistry.isCrumblingJewelry(""));
+	}
 }

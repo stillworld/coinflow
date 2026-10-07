@@ -5,7 +5,7 @@ package com.coinflow;
  */
 public class Version
 {
-	private static final String VERSION = "1.4.0";
+	private static final String VERSION = "1.5.0";
 
 	private Version()
 	{

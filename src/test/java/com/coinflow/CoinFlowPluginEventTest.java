@@ -5821,6 +5821,305 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
+	public void wornRingOfRecoil_crumbles_recordsSupplyExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int recoilId = 2068; // Ring of recoil
+		stubTrackableItem(recoilId, "Ring of recoil", 900L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, recoilId, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Recoil spends its last charge: WORN becomes empty, INV does not change
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(900L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(-900L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.getPendingWornAmmoExpenses().containsKey(recoilId));
+	}
+
+	@Test
+	public void wornRingOfDueling1_crumbles_recordsSupplyExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int dueling1Id = 2566; // Ring of dueling(1)
+		stubTrackableItem(dueling1Id, "Ring of dueling(1)", 400L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, dueling1Id, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Last teleport used: ring crumbles, WORN becomes empty
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(400L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(-400L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.getPendingWornAmmoExpenses().containsKey(dueling1Id));
+	}
+
+	@Test
+	public void wornRingOfDueling2to1_degrades_noExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int dueling2Id = 2564; // Ring of dueling(2)
+		int dueling1Id = 2566; // Ring of dueling(1)
+		stubTrackableItem(dueling2Id, "Ring of dueling(2)", 500L);
+		stubTrackableItem(dueling1Id, "Ring of dueling(1)", 400L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, dueling2Id, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Charge step: (2) -> (1) while still equipped
+		ItemContainer degradedEquip = mockContainer(InventoryID.WORN, dueling1Id, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(degradedEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, degradedEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertTrue(plugin.getPendingWornAmmoExpenses().isEmpty());
+	}
+
+	@Test
+	public void wornRingOfRecoil_unequippedWornFirst_noExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int recoilId = 2068;
+		stubTrackableItem(recoilId, "Ring of recoil", 900L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, recoilId, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Unequip: WORN dispatches first (recoil removed, pending expense recorded)
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		// INV dispatches second: recoil appears in inventory, cancelling the pending expense
+		ItemContainer invWithRing = mockContainer(InventoryID.INV, recoilId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(invWithRing);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, invWithRing));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertFalse(plugin.getPendingWornAmmoExpenses().containsKey(recoilId));
+	}
+
+	@Test
+	public void wornRingOfRecoil_unequippedInvDispatchedFirst_noExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int recoilId = 2068;
+		stubTrackableItem(recoilId, "Ring of recoil", 900L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, recoilId, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// INV dispatches first with the ring; client WORN container already empty
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+
+		ItemContainer invWithRing = mockContainer(InventoryID.INV, recoilId, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(invWithRing);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, invWithRing));
+
+		// WORN dispatches second
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertFalse(plugin.getPendingWornAmmoExpenses().containsKey(recoilId));
+	}
+
+	@Test
+	public void wornRingOfRecoil_crumbleWhileBankOpen_notExpensed()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int recoilId = 2068;
+		stubTrackableItem(recoilId, "Ring of recoil", 900L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, recoilId, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Player opens the bank
+		WidgetLoaded openBank = new WidgetLoaded();
+		openBank.setGroupId(InterfaceID.BANKMAIN);
+		plugin.onWidgetLoaded(openBank);
+		WidgetLoaded openBankSide = new WidgetLoaded();
+		openBankSide.setGroupId(InterfaceID.BANKSIDE);
+		plugin.onWidgetLoaded(openBankSide);
+		Assert.assertTrue(plugin.interfaceTracker.isTrackingSuppressed());
+
+		// WORN removal while tracking is suppressed (e.g. deposit-all)
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.BANKMAIN, 0, false));
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.BANKSIDE, 0, false));
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertTrue(plugin.getPendingWornAmmoExpenses().isEmpty());
+	}
+
+	@Test
+	public void wornAmuletOfGlory_removedWithoutInv_notExpensed()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int gloryId = 1704; // Amulet of glory(4)
+		stubTrackableItem(gloryId, "Amulet of glory(4)", 11_000L);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		ItemContainer initialEquip = mockContainer(InventoryID.WORN, gloryId, 1);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(initialEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, initialEquip));
+
+		// Glory leaves WORN without reaching INV (unreconciled removal): not a
+		// crumble-type item, so no expense is ever booked.
+		ItemContainer emptyEquip = mockContainer(InventoryID.WORN);
+		when(client.getItemContainer(InventoryID.WORN)).thenReturn(emptyEquip);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.WORN, emptyEquip));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertTrue(plugin.getPendingWornAmmoExpenses().isEmpty());
+	}
+
+	@Test
+	public void invRingOfDueling1_crumbles_recordsSupplyExpense()
+	{
+		int dueling1Id = 2566; // Ring of dueling(1)
+		stubTrackableItem(dueling1Id, "Ring of dueling(1)", 400L);
+
+		// Baseline: ring in inventory
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, dueling1Id, 1)
+		));
+
+		// Rubbed from the pack: crumbles to dust, no items gained
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV)
+		));
+
+		Assert.assertEquals(400L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(-400L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(dueling1Id));
+	}
+
+	@Test
+	public void invRingOfDueling1_dropped_notExpensed()
+	{
+		int dueling1Id = 2566;
+		stubTrackableItem(dueling1Id, "Ring of dueling(1)", 400L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, dueling1Id, 1)
+		));
+
+		clickDrop(dueling1Id, "Ring of dueling(1)");
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV)
+		));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(dueling1Id));
+	}
+
+	@Test
+	public void invRingOfRecoil_lost_notExpensed()
+	{
+		int recoilId = 2068;
+		stubTrackableItem(recoilId, "Ring of recoil", 900L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, recoilId, 1)
+		));
+
+		// Recoil leaves the pack without a Drop click (e.g. fed to a Ring of
+		// suffering): not teleport jewelry, so no expense is booked here.
+		// WeaponChargeTracker expenses suffering charge drains separately.
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV)
+		));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(recoilId));
+	}
+
+	@Test
 	public void masterScrollBook_transitionBetweenEmptyAndCharged_recordsZeroProfitAndExpense()
 	{
 		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);

@@ -75,9 +75,14 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 
 			// A "Drop" click means the item left for the ground, not the player's
 			// stomach: route through the own-drop path regardless of item type.
+			// Last-charge teleport jewelry crumbled in the pack is a supply
+			// expense; other crumble items (e.g. Ring of recoil) are excluded here
+			// because an inventory loss usually means feeding a Ring of suffering,
+			// which WeaponChargeTracker expenses separately.
 			boolean isConsumable = !context.isDropIntent(itemId)
 				&& (ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
-				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName));
+				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName)
+				|| ConsumableRegistry.isLastChargeTeleportJewelry(itemName));
 
 			if (isConsumable)
 			{

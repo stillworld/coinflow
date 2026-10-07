@@ -132,6 +132,41 @@ public final class ConsumableRegistry
 		NON_CONSUMABLE_TELEPORT_SCROLLS.add("annihilation teleport scroll");
 	}
 
+	// Charged teleport jewelry that crumbles to dust when its last charge is used
+	// (e.g. "Ring of dueling(1)" -> nothing). These can be rubbed worn or from the
+	// inventory. Jewelry that depletes to an uncharged variant instead (glory,
+	// ring of wealth, combat bracelet, skills necklace, pharaoh's sceptre) is
+	// excluded on purpose — those transitions are handled as degradation pairs.
+	private static final Set<String> LAST_CHARGE_TELEPORT_BASES = new HashSet<>(Arrays.asList(
+		"ring of dueling",
+		"games necklace",
+		"slayer ring",
+		"necklace of passage",
+		"burning amulet",
+		"digsite pendant",
+		"ring of returning"
+	));
+
+	// Charged worn items that crumble at (1) but are not teleport jewelry.
+	private static final Set<String> LAST_CHARGE_WORN_BASES = new HashSet<>(Collections.singletonList(
+		"castle wars bracelet"
+	));
+
+	// Single-life worn jewelry with no charge count in the item name — it simply
+	// disappears from the equipment slot when consumed (e.g. Ring of recoil when
+	// its 40 recoil hits are spent, Ring of life when it saves the wearer).
+	private static final Set<String> CRUMBLING_WORN_JEWELRY = new HashSet<>(Arrays.asList(
+		"ring of recoil",
+		"ring of life",
+		"binding necklace",
+		"dodgy necklace",
+		"bracelet of slaughter",
+		"expeditious bracelet",
+		"ring of forging",
+		"bracelet of clay",
+		"amulet of chemistry"
+	));
+
 	/**
 	 * Returns true if the item name represents a zero-value byproduct container
 	 * left over after consuming food or drink.
@@ -383,6 +418,53 @@ public final class ConsumableRegistry
 		}
 
 		return false;
+	}
+
+	/**
+	 * Returns true if the item is a last-charge variant of crumble-type teleport
+	 * jewelry (e.g. "Ring of dueling(1)", "Games necklace(1)"). These crumble to
+	 * dust whether rubbed from the equipment slot or the inventory.
+	 *
+	 * Uses POTION_PATTERN directly rather than {@link #parsePotion}: jewelry base
+	 * names are deliberately excluded from potion parsing by NON_POTION_KEYWORDS.
+	 */
+	public static boolean isLastChargeTeleportJewelry(String itemName)
+	{
+		return isLastChargeVariant(itemName, LAST_CHARGE_TELEPORT_BASES);
+	}
+
+	/**
+	 * Returns true if a worn item disappearing from the equipment slot means it
+	 * was consumed (crumbled to dust) rather than unequipped. Covers last-charge
+	 * teleport jewelry plus single-life charged jewelry with no charge count in
+	 * the item name (e.g. Ring of recoil, Dodgy necklace).
+	 */
+	public static boolean isCrumblingJewelry(String itemName)
+	{
+		if (itemName == null || itemName.isEmpty())
+		{
+			return false;
+		}
+		if (CRUMBLING_WORN_JEWELRY.contains(itemName.trim().toLowerCase(Locale.ROOT)))
+		{
+			return true;
+		}
+		return isLastChargeTeleportJewelry(itemName)
+			|| isLastChargeVariant(itemName, LAST_CHARGE_WORN_BASES);
+	}
+
+	private static boolean isLastChargeVariant(String itemName, Set<String> bases)
+	{
+		if (itemName == null || itemName.isEmpty())
+		{
+			return false;
+		}
+		Matcher m = POTION_PATTERN.matcher(itemName.trim());
+		if (!m.matches() || !"1".equals(m.group(2)))
+		{
+			return false;
+		}
+		return bases.contains(m.group(1).trim().toLowerCase(Locale.ROOT));
 	}
 
 	/**

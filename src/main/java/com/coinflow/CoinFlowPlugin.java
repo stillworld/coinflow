@@ -177,7 +177,9 @@ public class CoinFlowPlugin extends Plugin
 	boolean lootingBagInitialized;
 
 	/**
-	 * Track ammo and thrown weapons removed from WORN that were not unequipped to INV.
+	 * Track ammo, thrown weapons, and crumble-type jewelry removed from WORN that
+	 * were not unequipped to INV (e.g. fired bolts, a spent Ring of recoil, or a
+	 * Ring of dueling(1) that crumbled on its last charge).
 	 */
 	final Map<Integer, Integer> pendingWornAmmoExpenses = new HashMap<>();
 
@@ -659,7 +661,9 @@ public class CoinFlowPlugin extends Plugin
 
 					if (effectiveQty > 0)
 					{
-						if (ConsumableRegistry.isAmmo(name))
+						// Ammo fired/thrown, or jewelry that crumbled on its last
+						// charge: consumed in place rather than unequipped to INV.
+						if (ConsumableRegistry.isAmmo(name) || ConsumableRegistry.isCrumblingJewelry(name))
 						{
 							pendingWornAmmoExpenses.merge(canonicalId, effectiveQty, Integer::sum);
 						}
@@ -1108,7 +1112,8 @@ public class CoinFlowPlugin extends Plugin
 
 			reconciliationEngine.reconcile(context);
 
-			// Drain any remaining consumed equipped ammo/thrown weapons into supply expenses
+			// Drain any remaining consumed equipped ammo/thrown weapons or crumbled
+			// jewelry into supply expenses
 			if (!pendingWornAmmoExpenses.isEmpty())
 			{
 				for (Map.Entry<Integer, Integer> entry : pendingWornAmmoExpenses.entrySet())
@@ -1126,7 +1131,7 @@ public class CoinFlowPlugin extends Plugin
 						}
 					}
 					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-					log.debug("Consumed equipped ammo: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
+					log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
 					removeRecentlyUnequipped(itemId, quantity);
 				}
 				pendingWornAmmoExpenses.clear();
@@ -2648,7 +2653,8 @@ public class CoinFlowPlugin extends Plugin
 			settlePendingDeath();
 		}
 
-		// Finalize pending equipped ammo/thrown weapons consumed without inventory changes
+		// Finalize pending equipped ammo/thrown weapons and crumbled jewelry
+		// consumed without inventory changes
 		if (!pendingWornAmmoExpenses.isEmpty())
 		{
 			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0 || deathTracker.isPending())
@@ -2673,7 +2679,7 @@ public class CoinFlowPlugin extends Plugin
 						}
 					}
 					wornAmmoExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-					log.debug("Consumed equipped ammo on tick: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
+					log.debug("Consumed equipped ammo/jewelry on tick: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
 					removeRecentlyUnequipped(itemId, quantity);
 				}
 				pendingWornAmmoExpenses.clear();
