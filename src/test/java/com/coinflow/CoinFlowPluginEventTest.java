@@ -2050,6 +2050,37 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
+	public void dialoguePurchaseDuringRebaseline_stillRecordsBasis()
+	{
+		// Regression: a Zaff buy landing inside a post-bank-close re-baseline
+		// window was swallowed into the baseline, losing the cost basis so the
+		// staves later sold as fully untracked income.
+		int staffId = 1391;
+		stubTrackableItem(staffId, "Battlestaff", 7945L);
+		stubTrackableItem(ItemID.COINS, "Coins", 1L);
+
+		plugin.previousInventorySnapshot = snapshot(ItemID.COINS, 1_000_000);
+		plugin.snapshotInitialized = true;
+
+		// Open + close bank → needsRebaseline
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.BANKMAIN);
+		plugin.onWidgetLoaded(open);
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.BANKMAIN, 0, false));
+		Assert.assertTrue(plugin.isNeedsRebaseline());
+
+		// The first inventory event after the close is the purchase diff itself
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, ItemID.COINS, 160_000, staffId, 120)));
+
+		Assert.assertEquals("Purchase is an asset conversion, not loot", 0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals("Basis must be recorded even during re-baseline", 120,
+			plugin.grandExchangeTracker.basisQuantity(staffId));
+		Assert.assertFalse(plugin.isNeedsRebaseline());
+	}
+
+	@Test
 	public void potionLossWithoutDropClick_isStillExpensedAsConsumed()
 	{
 		int potionId = 185;

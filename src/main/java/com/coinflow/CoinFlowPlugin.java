@@ -797,6 +797,24 @@ public class CoinFlowPlugin extends Plugin
 
 			if (!isProcessing)
 			{
+				// A purchase landing inside a re-baseline window (e.g. Zaff's
+				// daily battlestaves bought right after a login or bank close)
+				// is a real transaction, not baseline noise — swallowing it
+				// loses the cost basis, so the goods later sell as fully
+				// untracked income. Route it through ShopTracker instead.
+				if (interfaceTracker.isShopOpen() || isCoinsOnlyPurchase(rawGains, rawLosses))
+				{
+					applyGeLedger(
+						shopTracker.reconcileDiff(rawGains, rawLosses, session, itemManager, ignoredItemNames,
+							config.untrackedSalesAsIncome()),
+						ItemID.COINS);
+					log.debug("Purchase during re-baseline routed to shop tracking: {} gp for {}",
+						rawLosses.getOrDefault(ItemID.COINS, 0), rawGains);
+				}
+				else
+				{
+					log.debug("Baseline snapshot taken ({} items)", currentSnapshot.getItems().size());
+				}
 				previousInventorySnapshot = currentSnapshot;
 				snapshotInitialized = true;
 				if (client != null && client.getItemContainer(net.runelite.api.gameval.InventoryID.LOOTING_BAG) != null)
@@ -805,7 +823,6 @@ public class CoinFlowPlugin extends Plugin
 				}
 				rebaselineGraceTicks = 0;
 				interfaceTracker.setNeedsRebaseline(false);
-				log.debug("Baseline snapshot taken ({} items)", currentSnapshot.getItems().size());
 				return;
 			}
 			else
