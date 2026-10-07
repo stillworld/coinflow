@@ -1,18 +1,27 @@
 package com.coinflow;
 
+import java.awt.GraphicsEnvironment;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Test;
 
 public class SessionSummaryDialogTest
 {
+	/** Dialog construction needs a display; tests run headless via build.gradle. */
+	private static void assumeHeaded()
+	{
+		Assume.assumeFalse(GraphicsEnvironment.isHeadless());
+	}
+
 	@Test
 	public void sessionSummaryDialog_constructsWithNormalSession()
 	{
+		assumeHeaded();
 		Map<Integer, CoinFlowSession.TrackedItem> gains = new HashMap<>();
 		gains.put(1, new CoinFlowSession.TrackedItem(1, "Grimy ranarr weed", 10, 100_000L));
 		gains.put(2, new CoinFlowSession.TrackedItem(2, "Rune 2h sword", 2, 40_000L));
@@ -37,6 +46,7 @@ public class SessionSummaryDialogTest
 	@Test
 	public void sessionSummaryDialog_emptySession_doesNotThrow()
 	{
+		assumeHeaded();
 		CoinFlowSession emptySession = CoinFlowSession.createNew();
 
 		SessionSummaryDialog dialog = new SessionSummaryDialog((java.awt.Frame) null, emptySession, () -> {});
@@ -47,6 +57,7 @@ public class SessionSummaryDialogTest
 	@Test
 	public void sessionSummaryDialog_netLossSession_doesNotThrow()
 	{
+		assumeHeaded();
 		Map<Integer, CoinFlowSession.TrackedItem> expenses = Collections.singletonMap(
 			1, new CoinFlowSession.TrackedItem(1, "Stamina potion(4)", 5, 20_000L)
 		);
@@ -62,6 +73,7 @@ public class SessionSummaryDialogTest
 	@Test
 	public void sessionSummaryDialog_zeroExpensesSession_doesNotThrow()
 	{
+		assumeHeaded();
 		Map<Integer, CoinFlowSession.TrackedItem> gains = Collections.singletonMap(
 			1, new CoinFlowSession.TrackedItem(1, "Dragon bones", 100, 2_500L)
 		);
@@ -85,6 +97,7 @@ public class SessionSummaryDialogTest
 	@Test
 	public void sessionSummaryDialog_grossOnlyMode_doesNotThrow()
 	{
+		assumeHeaded();
 		Map<Integer, CoinFlowSession.TrackedItem> gains = Collections.singletonMap(
 			1, new CoinFlowSession.TrackedItem(1, "Dragon bones", 100, 2_500L)
 		);
@@ -162,6 +175,12 @@ public class SessionSummaryDialogTest
 			{
 				summaryOpened.set(true);
 			}
+
+			@Override
+			boolean confirmResetSession()
+			{
+				return false;
+			}
 		};
 		panel.init();
 
@@ -193,6 +212,12 @@ public class SessionSummaryDialogTest
 			{
 				summaryOpened.set(true);
 			}
+
+			@Override
+			boolean confirmResetSession()
+			{
+				return false;
+			}
 		};
 		panel.init();
 
@@ -223,6 +248,12 @@ public class SessionSummaryDialogTest
 			void openSessionSummary(CoinFlowSession s)
 			{
 				summaryOpened.set(true);
+			}
+
+			@Override
+			boolean confirmResetSession()
+			{
+				return false;
 			}
 		};
 		panel.init();

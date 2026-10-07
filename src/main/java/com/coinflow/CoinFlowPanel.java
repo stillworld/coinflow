@@ -1120,13 +1120,7 @@ public class CoinFlowPanel extends PluginPanel
 		promptOpen = true;
 		try
 		{
-			int confirm = JOptionPane.showConfirmDialog(
-				this,
-				"Reset active Coin Flow session and counters?",
-				"Reset Session",
-				JOptionPane.YES_NO_OPTION
-			);
-			if (confirm == JOptionPane.YES_OPTION)
+			if (confirmResetSession())
 			{
 				plugin.resetSession();
 			}
@@ -1135,6 +1129,20 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			promptOpen = false;
 		}
+	}
+
+	/**
+	 * Shows the reset confirmation dialog. Extracted so tests can stub the
+	 * modal answer instead of blocking on a real JOptionPane.
+	 */
+	boolean confirmResetSession()
+	{
+		return JOptionPane.showConfirmDialog(
+			this,
+			"Reset active Coin Flow session and counters?",
+			"Reset Session",
+			JOptionPane.YES_NO_OPTION
+		) == JOptionPane.YES_OPTION;
 	}
 
 	void openSessionSummary(CoinFlowSession session)
