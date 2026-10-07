@@ -86,6 +86,17 @@ public class InterfaceTracker
 		InterfaceID.DEADMANLOOT
 	)));
 
+	// ── Death reclaim interface IDs ──────────────────────────────────────
+	// Subset of SUPPRESSED_INTERFACES where death-loss recoveries happen.
+	// Baselines are taken on open and settled on GameTick once none of these
+	// remain open, because scene loads can clear the suppressed set without a
+	// WidgetClosed event.
+	static final Set<Integer> DEATH_RETRIEVAL_INTERFACES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+		InterfaceID.GRAVESTONE_RETRIEVAL,
+		InterfaceID.GRAVESTONE_GENERIC,
+		InterfaceID.DEATH_OFFICE
+	)));
+
 	// ── Coin-shop interface IDs tracked as an open-shop state ────────────
 	// Standard NPC shops transact in coins and produce usable inventory
 	// diffs, so they are NOT suppressed: diffs are routed to ShopTracker
@@ -160,6 +171,22 @@ public class InterfaceTracker
 	public boolean isShopOpen()
 	{
 		return !openShopInterfaces.isEmpty();
+	}
+
+	/**
+	 * Returns true while any death reclaim interface (gravestone, Death's
+	 * Office) is registered as open.
+	 */
+	public boolean isDeathRetrievalOpen()
+	{
+		for (int groupId : DEATH_RETRIEVAL_INTERFACES)
+		{
+			if (openSuppressedInterfaces.contains(groupId))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public void onWidgetLoaded(int groupId)

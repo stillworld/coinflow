@@ -938,7 +938,12 @@ public class CoinFlowPanel extends PluginPanel
 		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		if (itemManager != null)
 		{
-			AsyncBufferedImage image = itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
+			// Synthetic GP-denominated rows (Death) carry gp as their quantity;
+			// draw the icon once rather than painting a meaningless stack count.
+			boolean gpRow = item.getItemId() == DeathTracker.DEATH_ROW_ID;
+			AsyncBufferedImage image = gpRow
+				? itemManager.getImage(item.getItemId())
+				: itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
 			if (image != null)
 			{
 				image.addTo(iconLabel);
