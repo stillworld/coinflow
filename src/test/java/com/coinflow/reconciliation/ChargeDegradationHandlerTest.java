@@ -400,4 +400,255 @@ public class ChargeDegradationHandlerTest
 
 		Assert.assertTrue("Lit lantern in rawGains must be suppressed", context.getRawGains().isEmpty());
 	}
+
+	// ── Repair & recharge transitions ────────────────────────────────────
+
+	@Test
+	public void barrowsRepair_degradedToBase_cancelsGainsAndLosses_leavesFee()
+	{
+		stubItem(50001, "Guthan's platebody 100", 150000L);
+		stubItem(50002, "Guthan's platebody", 184122L);
+		stubItem(ItemID.COINS, "Coins", 1L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(50002, 1); // repaired Guthan's platebody
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(50001, 1);          // Guthan's platebody 100 handed in
+		rawLosses.put(ItemID.COINS, 12758); // armour stand fee
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Repaired item must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertEquals("Only the coin fee remains in losses for the cash handler",
+			java.util.Collections.singletonMap(ItemID.COINS, 12758), context.getRawLosses());
+	}
+
+	@Test
+	public void barrowsFullyBroken_0toBase_cancelsGainsAndLosses()
+	{
+		stubItem(50003, "Dharok's helm 0", 100000L);
+		stubItem(50004, "Dharok's helm", 1200000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(50004, 1);
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(50003, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getRawGains().isEmpty());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void barrowsFirstUse_baseTo100_cancelsGainsAndLosses()
+	{
+		stubItem(50004, "Dharok's helm", 1200000L);
+		stubItem(50001, "Dharok's helm 100", 150000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(50001, 1); // pristine piece degrades to "100" on first use
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(50004, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getRawGains().isEmpty());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void gloryRecharge_2to4_cancelsGainsAndLosses()
+	{
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(1712, 1); // Amulet of glory(4)
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(1708, 1); // Amulet of glory(2)
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Recharged glory must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void unchargedGloryRecharge_baseTo4_cancelsGainsAndLosses()
+	{
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(1712, 1); // Amulet of glory(4)
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(1704, 1); // uncharged Amulet of glory
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getRawGains().isEmpty());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void unrelatedItems_atDegradeStages_doNotMatch()
+	{
+		stubItem(50003, "Dharok's helm 50", 1100000L);
+		stubItem(50002, "Guthan's platebody", 184122L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(50002, 1);
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(50003, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Unrelated gain must remain", context.getRawGains().containsKey(50002));
+		Assert.assertTrue("Unrelated loss must remain", context.getRawLosses().containsKey(50003));
+	}
+
+	@Test
+	public void usageStep_preferredOverRecharge_sameBaseLootSurvives()
+	{
+		stubItem(2556, "Ring of dueling(6)", 1000L);
+		stubItem(2558, "Ring of dueling(5)", 900L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(2552, 1); // Ring of dueling(8) picked up as loot
+		rawGains.put(2558, 1); // Ring of dueling(5) after teleporting
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(2556, 1); // Ring of dueling(6)
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, rawLosses, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Looted full-charge ring must stay a gain", context.getRawGains().containsKey(2552));
+		Assert.assertEquals(1, context.getRawGains().size());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void dropIntentLoss_notPairedWithGain()
+	{
+		stubItem(2556, "Ring of dueling(6)", 1000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(2552, 1); // Ring of dueling(8) loot
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(2556, 1); // Ring of dueling(6) dropped
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, rawLosses, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+		context.getDropIntentIds().add(2556);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getRawGains().containsKey(2552));
+		Assert.assertTrue(context.getRawLosses().containsKey(2556));
+	}
+
+	@Test
+	public void stagedNameToBare_nonBarrowsItem_doesNotMatch()
+	{
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Ancient page 25", "Ancient page"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Ancient page", "Ancient page 100"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Karil's crossbow 0", "Karil's crossbow"));
+	}
 }

@@ -35,6 +35,7 @@ import net.runelite.api.TileItem;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.EquipmentInventorySlot;
+import net.runelite.api.vars.AccountType;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
@@ -126,6 +127,14 @@ public class CoinFlowPlugin extends Plugin
 
 	@Inject
 	InventoryReconciliationEngine reconciliationEngine = new InventoryReconciliationEngine();
+
+	/**
+	 * Tracks local-player deaths: freezes diff tracking until post-respawn
+	 * containers settle, charges the loss to a synthetic "Death" expense row,
+	 * and reverses it for items reclaimed or picked back up.
+	 */
+	@Inject
+	DeathTracker deathTracker = new DeathTracker();
 
 	NavigationButton navButton;
 	CoinFlowPanel panel;
@@ -375,6 +384,19 @@ public class CoinFlowPlugin extends Plugin
 		"^(?:You get (?:a|an|some|\\d+)\\s+|You cut (?:a|an|some|\\d+)\\s+).*(?:logs?|bark)",
 		Pattern.CASE_INSENSITIVE
 	);
+	// "Death charges you 8,915 coins." — the authoritative reclaim-fee signal;
+	// bank/coffer payments and reclaim-to-bank items are invisible to diffs.
+	private static final Pattern DEATH_FEE_MESSAGE = Pattern.compile(
+		"Death charges you ([\\d,]+) coins"
+	);
+	// "You successfully retrieved everything from your gravestone." — a
+	// direct gravestone claim opens no retrieval interface and fires no
+	// ground Take click; the message is the only signal that the arriving
+	// items are death recovery rather than loot.
+	private static final Pattern GRAVE_RETRIEVAL_MESSAGE = Pattern.compile(
+		"retriev\\w+ .*your gravestone",
+		Pattern.CASE_INSENSITIVE
+	);
 
 	// ── Interface IDs that suppress tracking ─────────────────────────────
 	// Maintained via InterfaceTracker; aliases preserved for backward compatibility
@@ -394,6 +416,7 @@ public class CoinFlowPlugin extends Plugin
 		lootingBagInitialized = false;
 		interfaceTracker.reset(client != null && client.getGameState() != null ? client.getGameState() : GameState.UNKNOWN);
 		grandExchangeTracker.reset();
+		deathTracker.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -445,6 +468,7 @@ public class CoinFlowPlugin extends Plugin
 		resetTransientTrackingState();
 		interfaceTracker.reset(GameState.UNKNOWN);
 		grandExchangeTracker.reset();
+		deathTracker.reset();
 	}
 
 	@Provides
@@ -480,6 +504,10 @@ public class CoinFlowPlugin extends Plugin
 		{
 			snapshotInitialized = false;
 			lootingBagInitialized = false;
+			// Logout/hop while a death is still settling: discard the pending
+			// capture rather than risk mispricing the loss. The recovery
+			// ledger survives — reclaiming often happens after a relog.
+			deathTracker.discardPending();
 			resetTransientTrackingState();
 		}
 	}
@@ -489,6 +517,13 @@ public class CoinFlowPlugin extends Plugin
 	{
 		if (client != null && event.getActor() == client.getLocalPlayer())
 		{
+			// Capture BEFORE resetTransientTrackingState clears the looting
+			// bag/quiver caches — the pre-death state must reflect what was
+			// actually carried. Tracking freezes until the death settles.
+			if (session != null)
+			{
+				deathTracker.onDeath(combinedSnapshotItems(), client.getTickCount());
+			}
 			interfaceTracker.onActorDeath();
 			lootingBagInitialized = false;
 			resetTransientTrackingState();
@@ -517,6 +552,21 @@ public class CoinFlowPlugin extends Plugin
 		{
 			ItemContainer equipContainer = event.getItemContainer();
 			InventorySnapshot currentEquip = takeSnapshot(equipContainer);
+
+			// Death pending: advance the equipment baseline only. Without this
+			// the post-respawn gear clear would be booked as fired ammo (WORN
+			// ammo losses feed pendingWornAmmoExpenses) or dropped items.
+			if (deathTracker.isPending())
+			{
+				deathTracker.onContainerChanged(client != null ? client.getTickCount() : 0);
+				previousEquipmentSnapshot = currentEquip;
+				pendingWornAmmoExpenses.clear();
+				weaponChargeTracker.reset();
+				recentlyUnequippedItems.clear();
+				recentlyEquippedItems.clear();
+				gearSwapItemTicks.clear();
+				return;
+			}
 
 			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
 			{
@@ -741,6 +791,18 @@ public class CoinFlowPlugin extends Plugin
 
 		InventorySnapshot currentSnapshot = takeInventorySnapshot(invContainer);
 
+		// Death pending: freeze all diff tracking. The post-respawn container
+		// clear must never reach the normal pipeline (it would be booked as
+		// consumed supplies, cash spends, or drops on top of the Death row).
+		// Covers INV directly plus the rune pouch, quiver, and looting bag
+		// triggers that all funnel through here.
+		if (deathTracker.isPending())
+		{
+			deathTracker.onContainerChanged(client != null ? client.getTickCount() : 0);
+			previousInventorySnapshot = currentSnapshot;
+			return;
+		}
+
 		// If bank or trading interface is actively open, suppress tracking and update baseline
 		if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen())
 		{
@@ -752,10 +814,16 @@ public class CoinFlowPlugin extends Plugin
 		if (interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0 || !snapshotInitialized)
 		{
 			boolean isProcessing = false;
+			Map<Integer, Integer> rawGains = Collections.emptyMap();
+			Map<Integer, Integer> rawLosses = Collections.emptyMap();
 			if (previousInventorySnapshot != null && snapshotInitialized)
 			{
-				Map<Integer, Integer> rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
-				Map<Integer, Integer> rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+				rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
+				rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+				// A death-drop pickup inside a re-baseline window is still a
+				// recovery — reverse the Death charge before the gain is
+				// swallowed by the baseline.
+				matchDeathPickupGains(rawGains);
 				if (!rawLosses.isEmpty() && !rawGains.isEmpty())
 				{
 					for (Map.Entry<Integer, Integer> lostEntry : rawLosses.entrySet())
@@ -797,6 +865,24 @@ public class CoinFlowPlugin extends Plugin
 
 			if (!isProcessing)
 			{
+				// A purchase landing inside a re-baseline window (e.g. Zaff's
+				// daily battlestaves bought right after a login or bank close)
+				// is a real transaction, not baseline noise — swallowing it
+				// loses the cost basis, so the goods later sell as fully
+				// untracked income. Route it through ShopTracker instead.
+				if (interfaceTracker.isShopOpen() || isCoinsOnlyPurchase(rawGains, rawLosses))
+				{
+					applyGeLedger(
+						shopTracker.reconcileDiff(rawGains, rawLosses, session, itemManager, ignoredItemNames,
+							config.untrackedSalesAsIncome()),
+						ItemID.COINS);
+					log.debug("Purchase during re-baseline routed to shop tracking: {} gp for {}",
+						rawLosses.getOrDefault(ItemID.COINS, 0), rawGains);
+				}
+				else
+				{
+					log.debug("Baseline snapshot taken ({} items)", currentSnapshot.getItems().size());
+				}
 				previousInventorySnapshot = currentSnapshot;
 				snapshotInitialized = true;
 				if (client != null && client.getItemContainer(net.runelite.api.gameval.InventoryID.LOOTING_BAG) != null)
@@ -805,7 +891,6 @@ public class CoinFlowPlugin extends Plugin
 				}
 				rebaselineGraceTicks = 0;
 				interfaceTracker.setNeedsRebaseline(false);
-				log.debug("Baseline snapshot taken ({} items)", currentSnapshot.getItems().size());
 				return;
 			}
 			else
@@ -836,6 +921,10 @@ public class CoinFlowPlugin extends Plugin
 		{
 			Map<Integer, Integer> rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
 			Map<Integer, Integer> rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+
+			// Wilderness death-drop pickups carrying a Take click reverse the
+			// Death charge rather than counting as fresh loot.
+			matchDeathPickupGains(rawGains);
 
 			// ── Dialogue purchase (Zaff, Ali Morrisane, etc.) ─────────────
 			// Coins were the only thing lost and non-coin items arrived in the
@@ -1151,7 +1240,8 @@ public class CoinFlowPlugin extends Plugin
 			}
 			boolean trackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
 				&& !interfaceTracker.isShopOpen()
-				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
+				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0
+				&& !deathTracker.isPending();
 			weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
 				client.getTickCount());
 		}
@@ -1215,6 +1305,13 @@ public class CoinFlowPlugin extends Plugin
 	{
 		boolean wasSuppressed = interfaceTracker.isTrackingSuppressed();
 		interfaceTracker.onWidgetLoaded(event.getGroupId());
+
+		// A reclaim interface opened: baseline inv+worn so recovered items can
+		// be diffed out when it closes (no-op while the ledger is empty).
+		if (InterfaceTracker.DEATH_RETRIEVAL_INTERFACES.contains(event.getGroupId()))
+		{
+			deathTracker.setRetrievalBaseline(combinedSnapshotItems(), event.getGroupId());
+		}
 
 		if (event.getGroupId() == InterfaceID.WILDY_LOOT_CHEST || event.getGroupId() == InterfaceID.DEADMANLOOT)
 		{
@@ -1316,6 +1413,8 @@ public class CoinFlowPlugin extends Plugin
 			int itemId = event.getId();
 			int sceneX = event.getParam0();
 			int sceneY = event.getParam1();
+			deathTracker.recordTakeClick(
+				itemManager != null ? itemManager.canonicalize(itemId) : itemId, tick);
 			if (client != null && client.getLocalPlayer() != null)
 			{
 				try
@@ -1616,7 +1715,18 @@ public class CoinFlowPlugin extends Plugin
 		if (event.getType() == ChatMessageType.SPAM || event.getType() == ChatMessageType.GAMEMESSAGE)
 		{
 			String msg = event.getMessage();
-			if (msg.contains("fire catches") || msg.contains("light the logs") || msg.contains("burn the logs")
+			String cleanMsg = Text.removeTags(msg);
+			Matcher deathFee = DEATH_FEE_MESSAGE.matcher(cleanMsg);
+			if (deathFee.find())
+			{
+				deathTracker.noteChatFee(Long.parseLong(deathFee.group(1).replace(",", "")),
+					client != null ? client.getTickCount() : 0);
+			}
+			else if (GRAVE_RETRIEVAL_MESSAGE.matcher(cleanMsg).find())
+			{
+				deathTracker.noteGraveRetrieval(client != null ? client.getTickCount() : 0);
+			}
+			else if (msg.contains("fire catches") || msg.contains("light the logs") || msg.contains("burn the logs")
 				|| msg.contains("burn some") || msg.contains("add a log to the fire"))
 			{
 				lastFiremakingChatTick = client != null ? client.getTickCount() : 0;
@@ -2513,10 +2623,35 @@ public class CoinFlowPlugin extends Plugin
 		invItemsGainedThisTick.clear();
 		matchedUnequipsThisTick.clear();
 
+		// Settle reclaim-interface recovery once no retrieval interface remains
+		// open (WidgetClosed may be skipped when a scene load clears the
+		// suppressed set — e.g. Death's Office teleporting the player out).
+		if (deathTracker.hasRetrievalBaseline() && !interfaceTracker.isDeathRetrievalOpen())
+		{
+			applyDeathRecovery(deathTracker.settleRetrieval(combinedSnapshotItems(),
+				client != null ? client.getTickCount() : 0, isIronmanAccount()));
+		}
+
+		// A "Death charges you" message can arrive after the reclaim interface
+		// already closed and settled — apply an unconsumed chat fee once it has
+		// aged past the settle window (skipped while a baseline is live so the
+		// fee folds into the pending settle instead of applying twice).
+		if (!deathTracker.hasRetrievalBaseline() && !interfaceTracker.isDeathRetrievalOpen())
+		{
+			applyDeathReclaimFee(deathTracker.consumeDeferredChatFee(client != null ? client.getTickCount() : 0));
+		}
+
+		// Settle a pending death once post-respawn containers have gone quiet.
+		if (deathTracker.isPending() && client != null && client.getGameState() == GameState.LOGGED_IN
+			&& deathTracker.shouldSettle(client.getTickCount()))
+		{
+			settlePendingDeath();
+		}
+
 		// Finalize pending equipped ammo/thrown weapons consumed without inventory changes
 		if (!pendingWornAmmoExpenses.isEmpty())
 		{
-			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
+			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0 || deathTracker.isPending())
 			{
 				pendingWornAmmoExpenses.clear();
 			}
@@ -2549,7 +2684,8 @@ public class CoinFlowPlugin extends Plugin
 		// Finalize pending charge-based supply costs (runes/scales/shards stored inside weapons)
 		boolean chargeTrackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
 			&& !interfaceTracker.isShopOpen()
-			&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0;
+			&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0
+			&& !deathTracker.isPending();
 		if (client != null)
 		{
 			for (int varbitId : WeaponChargeTracker.trackedVarbitIds())
@@ -2928,6 +3064,244 @@ public class CoinFlowPlugin extends Plugin
 		}
 	}
 
+	// ── Death tracking ─────────────────────────────────────────────────
+
+	/**
+	 * Combined live inventory+equipment contents as canonical itemId -> qty.
+	 * The inventory snapshot folds in rune pouch, looting bag, quiver, and
+	 * sanctifier contents, so those supplies are captured too.
+	 */
+	Map<Integer, Integer> combinedSnapshotItems()
+	{
+		Map<Integer, Integer> map = new HashMap<>();
+		if (client == null)
+		{
+			return map;
+		}
+		ItemContainer inv = client.getItemContainer(InventoryID.INV);
+		if (inv != null)
+		{
+			takeInventorySnapshot(inv).getItems()
+				.forEach((id, qty) -> map.merge(canonicalize(id), qty, Integer::sum));
+		}
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn != null)
+		{
+			takeSnapshot(worn).getItems()
+				.forEach((id, qty) -> map.merge(canonicalize(id), qty, Integer::sum));
+		}
+		return map;
+	}
+
+	private int canonicalize(int itemId)
+	{
+		return itemManager != null ? itemManager.canonicalize(itemId) : itemId;
+	}
+
+	/**
+	 * Finalizes a pending death: re-baselines, diffs pre- vs post-death state,
+	 * and charges the loss to the aggregated "Death" expense row. Runs on
+	 * GameTick once post-respawn containers have gone quiet (or on timeout).
+	 */
+	private void settlePendingDeath()
+	{
+		// takeBaseline() first: it refreshes the looting bag/quiver caches that
+		// resetTransientTrackingState cleared, so the post-death snapshot can't
+		// manufacture phantom container losses.
+		takeBaseline();
+		Map<Integer, Integer> post = new HashMap<>();
+		if (previousInventorySnapshot != null)
+		{
+			previousInventorySnapshot.getItems()
+				.forEach((id, qty) -> post.merge(canonicalize(id), qty, Integer::sum));
+		}
+		if (previousEquipmentSnapshot != null)
+		{
+			previousEquipmentSnapshot.getItems()
+				.forEach((id, qty) -> post.merge(canonicalize(id), qty, Integer::sum));
+		}
+		Map<Integer, Integer> lost = deathTracker.computeLosses(post, itemManager);
+		deathTracker.discardPending();
+		interfaceTracker.setNeedsRebaseline(false);
+		rebaselineGraceTicks = 0;
+		weaponChargeTracker.reset();
+		pendingWornAmmoExpenses.clear();
+
+		if (lost.isEmpty())
+		{
+			log.debug("Death settled: no item loss (safe death or all kept)");
+			return;
+		}
+		if (!config.trackSpent())
+		{
+			log.debug("Death settled: {} item types lost, not recorded (trackSpent off)", lost.size());
+			return;
+		}
+
+		Map<Integer, Integer> filteredLost = new HashMap<>();
+		Map<Integer, Long> prices = new HashMap<>();
+		long totalValue = 0L;
+		for (Map.Entry<Integer, Integer> entry : lost.entrySet())
+		{
+			int itemId = canonicalize(entry.getKey());
+			String name = getItemName(itemId);
+			if (isIgnored(name))
+			{
+				continue;
+			}
+			long price;
+			if (itemId == ItemID.COINS)
+			{
+				price = 1;
+			}
+			else if (itemId == ItemID.PLATINUM)
+			{
+				price = 1000;
+			}
+			else
+			{
+				// Only tradeables carry a value on death. Untradeables are kept,
+				// converted, or reclaimed for a fee — none of which is a market
+				// loss (and minigame loadout gear would otherwise add noise).
+				price = itemManager != null ? itemManager.getItemPrice(itemId) : 0;
+			}
+			if (price <= 0)
+			{
+				continue;
+			}
+			filteredLost.merge(itemId, entry.getValue(), Integer::sum);
+			prices.putIfAbsent(itemId, price);
+			totalValue += price * (long) entry.getValue();
+		}
+
+		if (filteredLost.isEmpty())
+		{
+			log.debug("Death settled: only untradeable/ignored losses, no charge");
+			return;
+		}
+
+		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
+		expenses.put(DeathTracker.DEATH_ROW_ID,
+			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, totalValue, 1L));
+		session = session.withGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), expenses);
+
+		// Lost session gains can no longer be deducted a second time.
+		Map<Integer, Long> consumed = new HashMap<>();
+		filteredLost.forEach((id, qty) -> consumed.put(id, (long) qty));
+		session = session.markConsumed(consumed);
+
+		deathTracker.recordLost(filteredLost, prices);
+		log.debug("Death settled: {} gp loss across {} item types", totalValue, filteredLost.size());
+	}
+
+	/**
+	 * Matches gained items against the death ledger, limited to items carrying
+	 * a live Take click — the signal that distinguishes picking up your own
+	 * death drops from looting a coincidental item of the same id.
+	 * Matched quantities are removed from {@code gains} in place.
+	 */
+	private void matchDeathPickupGains(Map<Integer, Integer> gains)
+	{
+		if (gains == null || gains.isEmpty() || !deathTracker.hasLedger())
+		{
+			return;
+		}
+		int tick = client != null ? client.getTickCount() : 0;
+
+		// Ledger keys are canonical; the gains map may carry raw ids (noted,
+		// placeholders), so match on a canonicalized copy and subtract back.
+		Map<Integer, Integer> canonicalGains = new HashMap<>();
+		gains.forEach((id, qty) -> canonicalGains.merge(canonicalize(id), qty, Integer::sum));
+		// Post-settle grace: a reclaim item that arrives after the interface
+		// closed matches the ledger without needing a Take click.
+		DeathTracker.RecoveryResult result = deathTracker.inRecoveryGrace(tick)
+			? deathTracker.recover(canonicalGains)
+			: deathTracker.recoverForTakeClicks(canonicalGains, tick);
+		if (result.isEmpty())
+		{
+			return;
+		}
+		for (Map.Entry<Integer, Integer> matched : result.recoveredQuantities.entrySet())
+		{
+			int remaining = matched.getValue();
+			for (Iterator<Map.Entry<Integer, Integer>> it = gains.entrySet().iterator();
+				it.hasNext() && remaining > 0;)
+			{
+				Map.Entry<Integer, Integer> entry = it.next();
+				if (canonicalize(entry.getKey()) != matched.getKey())
+				{
+					continue;
+				}
+				int take = Math.min(remaining, entry.getValue());
+				remaining -= take;
+				if (entry.getValue() <= take)
+				{
+					it.remove();
+				}
+				else
+				{
+					entry.setValue(entry.getValue() - take);
+				}
+			}
+		}
+		applyDeathRecovery(result);
+	}
+
+	/**
+	 * Applies a death recovery to the session: reverses the matched value off
+	 * the "Death" expense row, restores consumption on recovered session
+	 * gains, and folds any reclaim fee back into the Death row.
+	 */
+	private void applyDeathRecovery(DeathTracker.RecoveryResult result)
+	{
+		if (result == null || result.isEmpty() || session == null)
+		{
+			return;
+		}
+		if (result.value > 0)
+		{
+			Map<Integer, Long> reversal = new HashMap<>();
+			reversal.put(DeathTracker.DEATH_ROW_ID, result.value);
+			session = session.withExpenseReversal(reversal);
+
+			Map<Integer, Long> restored = new HashMap<>();
+			result.recoveredQuantities.forEach((id, qty) -> restored.put(id, (long) qty));
+			session = session.withRestoredConsumption(restored);
+			log.debug("Death recovery: {} gp reversed for {}", result.value, result.recoveredQuantities);
+		}
+		if (result.fee > 0)
+		{
+			applyDeathReclaimFee(result.fee);
+		}
+	}
+
+	/**
+	 * Adds a reclaim fee to the aggregated "Death" expense row. Skipped when
+	 * spent tracking is off — a fee-only row has no matching loss to justify.
+	 */
+	private void applyDeathReclaimFee(long fee)
+	{
+		if (fee <= 0 || session == null || config == null || !config.trackSpent())
+		{
+			return;
+		}
+		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
+		expenses.put(DeathTracker.DEATH_ROW_ID,
+			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, fee, 1L));
+		session = session.withGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), expenses);
+		log.debug("Death reclaim fee: {} gp", fee);
+	}
+
+	/**
+	 * Whether the local account gets the 50% ironman reclaim-fee discount.
+	 * All iron types qualify except ultimate ironmen.
+	 */
+	private boolean isIronmanAccount()
+	{
+		AccountType type = client != null ? client.getAccountType() : null;
+		return type != null && type != AccountType.NORMAL && type != AccountType.ULTIMATE_IRONMAN;
+	}
+
 	/**
 	 * Name of the item currently in the weapon slot, or null.
 	 */
@@ -3234,6 +3608,10 @@ public class CoinFlowPlugin extends Plugin
 				invItemsGainedThisTick.put(pickup.itemId, invGained - pickup.qty);
 			}
 		}
+
+		// Death-drop pickups into an open container still count as recovery —
+		// this path bypasses the handler chain just like own-drop pickups.
+		matchDeathPickupGains(containerGains);
 
 		// Re-picking up the player's own dropped items into an open bag/box/sack
 		// must not count as fresh profit — this path bypasses the handler chain.
@@ -3562,6 +3940,7 @@ public class CoinFlowPlugin extends Plugin
 		session = CoinFlowSession.createNew();
 		goalCompletedNotified = false;
 		grandExchangeTracker.reset();
+		deathTracker.reset();
 		if (client != null && client.getGameState() == GameState.LOGGED_IN)
 		{
 			grandExchangeTracker.seed(client.getGrandExchangeOffers());
@@ -3602,7 +3981,8 @@ public class CoinFlowPlugin extends Plugin
 	/**
 	 * True when the diff is exactly "coins out, non-coin items in": the shape of
 	 * an NPC dialogue purchase. Any other loss (noting fee, processing input,
-	 * consumed supply) disqualifies it so those handlers keep ownership.
+	 * consumed supply) disqualifies it so those handlers keep ownership. Coins
+	 * exchanged only for platinum tokens is a currency conversion, not a buy.
 	 */
 	static boolean isCoinsOnlyPurchase(Map<Integer, Integer> rawGains, Map<Integer, Integer> rawLosses)
 	{
@@ -3617,7 +3997,7 @@ public class CoinFlowPlugin extends Plugin
 		}
 		for (int gainedId : rawGains.keySet())
 		{
-			if (gainedId != ItemID.COINS)
+			if (gainedId != ItemID.COINS && gainedId != ItemID.PLATINUM)
 			{
 				return true;
 			}

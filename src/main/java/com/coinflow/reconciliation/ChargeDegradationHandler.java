@@ -82,20 +82,37 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				int lostQty = lostQtyBoxed;
 
 				int canonicalLostId = itemManager != null ? itemManager.canonicalize(lostId) : lostId;
+				if (context.isDropIntent(canonicalLostId))
+				{
+					// Dropped, not transformed: leave for the own-drop path
+					continue;
+				}
 				String lostName = context.getItemName(canonicalLostId);
 
+				// Prefer a single-step usage transition (e.g. (3) -> (2)) over a
+				// broader recharge/repair match, so a same-base loot pickup in the
+				// same tick (e.g. a dropped Ring of dueling(8)) is not paired away.
 				Integer gainedMatchId = null;
+				Integer broadMatchId = null;
 				for (int gainedId : rawGains.keySet())
 				{
 					int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 					String gainedName = context.getItemName(canonicalGainedId);
 
-					if (isChargeDegradationPair(lostName, gainedName)
+					if (isUsageStepPair(lostName, gainedName)
 						|| isLightSourcePair(canonicalLostId, canonicalGainedId, lostName, gainedName))
 					{
 						gainedMatchId = gainedId;
 						break;
 					}
+					if (broadMatchId == null && isChargeDegradationPair(lostName, gainedName))
+					{
+						broadMatchId = gainedId;
+					}
+				}
+				if (gainedMatchId == null)
+				{
+					gainedMatchId = broadMatchId;
 				}
 
 				if (gainedMatchId != null)
@@ -146,7 +163,10 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	}
 
 	/**
-	 * Checks if lostName degraded into gainedName (e.g. Slayer ring (3) -> Slayer ring (2)).
+	 * Checks if lostName transitioned into gainedName via a charge or degrade-state
+	 * change on the same item: degradation (Slayer ring (3) -> (2)), depletion
+	 * ((1) -> uncharged), recharge ((2) -> (4), base -> (4)), or Barrows repair /
+	 * first-use ("X 50" -> "X", "X" -> "X 100").
 	 */
 	public static boolean isChargeDegradationPair(String lostName, String gainedName)
 	{
@@ -155,7 +175,61 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 			return false;
 		}
 
-		// 1. Parenthesized charges: e.g. (3) -> (2)
+		// 1. Parenthesized charges: same item at a different charge count —
+		//    degrade steps, multi-charge drains, or fountain/altar recharges.
+		ChargeInfo lostCharge = parseCharge(lostName);
+		ChargeInfo gainedCharge = parseCharge(gainedName);
+		if (lostCharge != null && gainedCharge != null)
+		{
+			return gainedCharge.baseName.equalsIgnoreCase(lostCharge.baseName)
+				&& gainedCharge.tag.equalsIgnoreCase(lostCharge.tag)
+				&& gainedCharge.charges != lostCharge.charges;
+		}
+
+		// 2. Charged <-> uncharged base name: (1) depleting to uncharged, or an
+		//    uncharged item recharged back up (e.g. glory -> glory(4)).
+		if (lostCharge != null && lostCharge.charges == 1 && matchesUnchargedBase(gainedName, lostCharge))
+		{
+			return true;
+		}
+		if (gainedCharge != null && matchesUnchargedBase(lostName, gainedCharge))
+		{
+			return true;
+		}
+
+		// 3. Barrows degrade states: same base item moving between any stages
+		//    (100 -> 75 -> 50 -> 25 -> 0), to the repaired bare name
+		//    ("X 50" -> "X"), or from it on first use ("X" -> "X 100"). The
+		//    bare-name direction is limited to Barrows brothers' gear, since the
+		//    stage pattern alone matches any name ending in those numbers.
+		Matcher barrowsLost = BARROWS_PATTERN.matcher(lostName);
+		Matcher barrowsGained = BARROWS_PATTERN.matcher(gainedName);
+		boolean lostStaged = barrowsLost.matches();
+		boolean gainedStaged = barrowsGained.matches();
+		if (lostStaged || gainedStaged)
+		{
+			String lostBase = lostStaged ? barrowsLost.group(1).trim() : lostName.trim();
+			String gainedBase = gainedStaged ? barrowsGained.group(1).trim() : gainedName.trim();
+			return lostBase.equalsIgnoreCase(gainedBase)
+				&& (lostStaged && gainedStaged || isBarrowsBrotherItem(lostBase));
+		}
+
+		return false;
+	}
+
+	/**
+	 * Single-step usage transitions only: one charge drained ((3) -> (2)),
+	 * (1) -> uncharged, or one Barrows stage down (100 -> 75). These are the
+	 * unambiguous per-tick transitions and take priority over broader
+	 * recharge/repair matches.
+	 */
+	static boolean isUsageStepPair(String lostName, String gainedName)
+	{
+		if (lostName == null || gainedName == null)
+		{
+			return false;
+		}
+
 		ChargeInfo lostCharge = parseCharge(lostName);
 		ChargeInfo gainedCharge = parseCharge(gainedName);
 		if (lostCharge != null && gainedCharge != null)
@@ -164,31 +238,47 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				&& gainedCharge.tag.equalsIgnoreCase(lostCharge.tag)
 				&& gainedCharge.charges == lostCharge.charges - 1;
 		}
-
-		// 2. Depleted to uncharged: e.g. (1) -> uncharged
-		if (lostCharge != null && lostCharge.charges == 1)
+		if (lostCharge != null && lostCharge.charges == 1 && matchesUnchargedBase(gainedName, lostCharge))
 		{
-			String expectedUncharged = lostCharge.tag.isEmpty()
-				? lostCharge.baseName
-				: lostCharge.baseName + " (" + lostCharge.tag + ")";
-			if (gainedName.equalsIgnoreCase(expectedUncharged) || gainedName.equalsIgnoreCase(lostCharge.baseName))
-			{
-				return true;
-			}
+			return true;
 		}
 
-		// 3. Barrows degradation: 100 -> 75 -> 50 -> 25 -> 0
 		Matcher barrowsLost = BARROWS_PATTERN.matcher(lostName);
 		Matcher barrowsGained = BARROWS_PATTERN.matcher(gainedName);
 		if (barrowsLost.matches() && barrowsGained.matches())
 		{
-			String baseLost = barrowsLost.group(1);
-			String baseGained = barrowsGained.group(1);
-			String nextStage = getNextBarrowsStage(barrowsLost.group(2));
-			return baseLost.equalsIgnoreCase(baseGained) && barrowsGained.group(2).equals(nextStage);
+			return barrowsLost.group(1).trim().equalsIgnoreCase(barrowsGained.group(1).trim())
+				&& barrowsGained.group(2).equals(nextBarrowsStage(barrowsLost.group(2)));
 		}
-
 		return false;
+	}
+
+	private static String nextBarrowsStage(String stage)
+	{
+		switch (stage)
+		{
+			case "100": return "75";
+			case "75": return "50";
+			case "50": return "25";
+			case "25": return "0";
+			default: return null;
+		}
+	}
+
+	private static boolean isBarrowsBrotherItem(String baseName)
+	{
+		String lower = baseName.toLowerCase(java.util.Locale.ROOT);
+		return lower.startsWith("ahrim's ") || lower.startsWith("dharok's ")
+			|| lower.startsWith("guthan's ") || lower.startsWith("karil's ")
+			|| lower.startsWith("torag's ") || lower.startsWith("verac's ");
+	}
+
+	private static boolean matchesUnchargedBase(String bareName, ChargeInfo charged)
+	{
+		String expectedUncharged = charged.tag.isEmpty()
+			? charged.baseName
+			: charged.baseName + " (" + charged.tag + ")";
+		return bareName.equalsIgnoreCase(expectedUncharged) || bareName.equalsIgnoreCase(charged.baseName);
 	}
 
 	/**
@@ -248,18 +338,6 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 		}
 
 		return false;
-	}
-
-	private static String getNextBarrowsStage(String currentStage)
-	{
-		switch (currentStage)
-		{
-			case "100": return "75";
-			case "75": return "50";
-			case "50": return "25";
-			case "25": return "0";
-			default: return null;
-		}
 	}
 
 	public static boolean isLightSourcePair(int lostId, int gainedId, String lostName, String gainedName)

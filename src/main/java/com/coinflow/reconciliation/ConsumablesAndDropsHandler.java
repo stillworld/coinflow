@@ -25,6 +25,8 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 		CoinFlowSession session = context.getSession();
 		Map<Integer, Integer> recentlyDroppedItems = context.getRecentlyDroppedItems();
 
+		netCashExchange(context.getRawGains(), rawLosses);
+
 		if (rawLosses.isEmpty())
 		{
 			return;
@@ -50,19 +52,24 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				long price = priceOf(itemId, itemManager);
 				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 				context.getRecentlyExpensedDrops().merge(itemId, quantity, Integer::sum);
-
-				if (session != null)
-				{
-					CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
-					if (existingGain != null && existingGain.getRemainingQuantity() > 0)
-					{
-						context.markSessionGainConsumed(itemId,
-							Math.min(quantity, existingGain.getRemainingQuantity()));
-					}
-				}
+				retireSessionGain(context, session, itemId, quantity);
 
 				log.debug("Dropped item expensed: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
+				continue;
+			}
+
+			// Cash payments: coins/platinum leaving with no specialist claim is
+			// money spent — fees, fares, repairs, coffers, services. Expense at
+			// face value; a drop-intent coin loss keeps the own-drop path, and
+			// cash must never enter the drop bookkeeping, where it would
+			// suppress later coin pickups.
+			if ((itemId == ItemID.COINS || itemId == ItemID.PLATINUM) && !context.isDropIntent(itemId))
+			{
+				long price = itemId == ItemID.PLATINUM ? 1000L : 1L;
+				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				retireSessionGain(context, session, itemId, quantity);
+				log.debug("Cash spend: {} x{} = {} gp", itemName, quantity, (long) quantity * price);
 				continue;
 			}
 
@@ -82,15 +89,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 
 				// Retire matching session gains so a later drop/sale of pre-session
 				// stock cannot deduct the already-consumed loot a second time.
-				if (session != null)
-				{
-					CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
-					if (existingGain != null && existingGain.getRemainingQuantity() > 0)
-					{
-						context.markSessionGainConsumed(itemId,
-							Math.min(quantity, existingGain.getRemainingQuantity()));
-					}
-				}
+				retireSessionGain(context, session, itemId, quantity);
 
 				log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
@@ -129,6 +128,66 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 						itemName, unacquiredDroppedQty);
 				}
 			}
+		}
+	}
+
+	/**
+	 * Cancels banker coin/platinum token exchanges (1 token = 1,000 coins) so a
+	 * pure currency conversion is neither a spend nor income.
+	 */
+	static void netCashExchange(Map<Integer, Integer> gains, Map<Integer, Integer> losses)
+	{
+		netExchange(losses, gains, ItemID.PLATINUM, ItemID.COINS);
+		netExchange(losses, gains, ItemID.COINS, ItemID.PLATINUM);
+	}
+
+	private static void netExchange(Map<Integer, Integer> losses, Map<Integer, Integer> gains, int lostId, int gainedId)
+	{
+		int lost = losses.getOrDefault(lostId, 0);
+		int gained = gains.getOrDefault(gainedId, 0);
+		if (lost <= 0 || gained <= 0)
+		{
+			return;
+		}
+		int tokens = lostId == ItemID.PLATINUM ? Math.min(lost, gained / 1000) : Math.min(gained, lost / 1000);
+		if (tokens <= 0)
+		{
+			return;
+		}
+		int lostMatched = lostId == ItemID.PLATINUM ? tokens : tokens * 1000;
+		int gainedMatched = lostId == ItemID.PLATINUM ? tokens * 1000 : tokens;
+		subtract(losses, lostId, lostMatched);
+		subtract(gains, gainedId, gainedMatched);
+		log.debug("Netted currency exchange: {} x{} -> {} x{}", lostId, lostMatched, gainedId, gainedMatched);
+	}
+
+	private static void subtract(Map<Integer, Integer> map, int id, int qty)
+	{
+		int remaining = map.getOrDefault(id, 0) - qty;
+		if (remaining <= 0)
+		{
+			map.remove(id);
+		}
+		else
+		{
+			map.put(id, remaining);
+		}
+	}
+
+	/**
+	 * Retires matching session gains consumed in place so a later drop or sale
+	 * of identical pre-session stock cannot deduct them a second time.
+	 */
+	private static void retireSessionGain(ReconciliationContext context, CoinFlowSession session, int itemId, int quantity)
+	{
+		if (session == null)
+		{
+			return;
+		}
+		CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
+		if (existingGain != null && existingGain.getRemainingQuantity() > 0)
+		{
+			context.markSessionGainConsumed(itemId, Math.min(quantity, existingGain.getRemainingQuantity()));
 		}
 	}
 

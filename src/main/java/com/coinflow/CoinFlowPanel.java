@@ -938,7 +938,12 @@ public class CoinFlowPanel extends PluginPanel
 		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		if (itemManager != null)
 		{
-			AsyncBufferedImage image = itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
+			// Synthetic GP-denominated rows (Death) carry gp as their quantity;
+			// draw the icon once rather than painting a meaningless stack count.
+			boolean gpRow = item.getItemId() == DeathTracker.DEATH_ROW_ID;
+			AsyncBufferedImage image = gpRow
+				? itemManager.getImage(item.getItemId())
+				: itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
 			if (image != null)
 			{
 				image.addTo(iconLabel);
@@ -1120,13 +1125,7 @@ public class CoinFlowPanel extends PluginPanel
 		promptOpen = true;
 		try
 		{
-			int confirm = JOptionPane.showConfirmDialog(
-				this,
-				"Reset active Coin Flow session and counters?",
-				"Reset Session",
-				JOptionPane.YES_NO_OPTION
-			);
-			if (confirm == JOptionPane.YES_OPTION)
+			if (confirmResetSession())
 			{
 				plugin.resetSession();
 			}
@@ -1135,6 +1134,20 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			promptOpen = false;
 		}
+	}
+
+	/**
+	 * Shows the reset confirmation dialog. Extracted so tests can stub the
+	 * modal answer instead of blocking on a real JOptionPane.
+	 */
+	boolean confirmResetSession()
+	{
+		return JOptionPane.showConfirmDialog(
+			this,
+			"Reset active Coin Flow session and counters?",
+			"Reset Session",
+			JOptionPane.YES_NO_OPTION
+		) == JOptionPane.YES_OPTION;
 	}
 
 	void openSessionSummary(CoinFlowSession session)

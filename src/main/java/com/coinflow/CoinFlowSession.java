@@ -599,6 +599,59 @@ public final class CoinFlowSession
 	}
 
 	/**
+	 * Returns a new session where previously consumed session gains become
+	 * deductible again (e.g. an item lost on death was reclaimed). Unlike
+	 * {@link #withExpenseReversal}, this touches only gain rows — used when the
+	 * matching expense lives under a synthetic row (Death) rather than the
+	 * item's own id.
+	 *
+	 * @param restored map of itemId -> quantity restored to the player's hands
+	 * @return new session snapshot with restored deductible quantities
+	 */
+	public CoinFlowSession withRestoredConsumption(Map<Integer, Long> restored)
+	{
+		if (restored == null || restored.isEmpty())
+		{
+			return this;
+		}
+
+		Map<Integer, TrackedItem> updatedGains = new HashMap<>(this.trackedItems);
+		boolean changed = false;
+
+		for (Map.Entry<Integer, Long> entry : restored.entrySet())
+		{
+			TrackedItem gain = updatedGains.get(entry.getKey());
+			if (gain != null && entry.getValue() != null && entry.getValue() > 0)
+			{
+				TrackedItem newGain = gain.withRestoredConsumption(entry.getValue());
+				if (newGain != gain)
+				{
+					updatedGains.put(entry.getKey(), newGain);
+					changed = true;
+				}
+			}
+		}
+
+		if (!changed)
+		{
+			return this;
+		}
+
+		return new CoinFlowSession(
+			updatedGains,
+			this.trackedExpenses,
+			this.grossProfit,
+			this.totalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			Instant.now(),
+			this.lastTickTime,
+			false
+		);
+	}
+
+	/**
 	 * Returns a new session snapshot with updated active time and in-game time tracking.
 	 * Called on each game tick to keep the timer and GP/hr accurate in real time.
 	 *

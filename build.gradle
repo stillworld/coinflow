@@ -48,6 +48,9 @@ tasks.withType(JavaExec).configureEach {
 
 // Mockito 4 inline mock maker requires these opens to instrument types at runtime
 tasks.withType(Test).configureEach {
+	// No Swing UI during tests: modal dialogs (e.g. the reset-session
+	// JOptionPane) would otherwise block the suite on headed machines.
+	systemProperty "java.awt.headless", "true"
 	jvmArgs(
 		"--add-opens=java.base/java.lang=ALL-UNNAMED",
 		"--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
