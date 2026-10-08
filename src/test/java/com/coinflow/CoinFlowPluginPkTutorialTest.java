@@ -8,6 +8,7 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.WorldView;
 import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
@@ -79,6 +80,14 @@ public class CoinFlowPluginPkTutorialTest
 
 		when(config.trackSpent()).thenReturn(true);
 		when(config.idleTimeoutMinutes()).thenReturn(5);
+		when(config.goalAmount()).thenReturn("");
+		when(config.goalName()).thenReturn("");
+		when(config.notifyOnGoal()).thenReturn(true);
+		when(config.includeAfkTime()).thenReturn(false);
+		when(config.showGoldDrops()).thenReturn(true);
+		when(config.goldDropMinThreshold()).thenReturn(0);
+		when(client.getMouseIdleTicks()).thenReturn(1000);
+		when(client.getKeyboardIdleTicks()).thenReturn(1000);
 		when(client.isClientThread()).thenReturn(true);
 		when(client.getTopLevelWorldView()).thenReturn(worldView);
 		when(worldView.getMapRegions()).thenReturn(new int[]{FEROX_REGION});
@@ -149,12 +158,27 @@ public class CoinFlowPluginPkTutorialTest
 		fireWorn();
 		fireInv(ItemID.COINS, 50_000, BOLTS_E, 999);
 
+		// A trailing strip on the next event (e.g. rune pouch varbit settle)
+		// must still be baselined — a single-shot re-baseline is consumed by
+		// the first event, letting later removals book supply expenses.
+		fireInv(ItemID.COINS, 50_000);
+
 		Assert.assertFalse(plugin.interfaceTracker.isInSuppressedRegion());
 		Assert.assertEquals(0L, plugin.session.getTotalProfit());
 		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
 
+		// Emulate the invokeLater takeBaseline cleanup that clears the flag on
+		// LOGGED_IN — the mocked clientThread never runs it.
+		plugin.setNeedsRebaseline(false);
+
+		// The exit window ages out over game ticks.
+		for (int i = 0; i < 3; i++)
+		{
+			plugin.onGameTick(new GameTick());
+		}
+
 		// A real gain after the tutorial is tracked normally again.
-		fireInv(ItemID.COINS, 50_000, BOLTS_E, 999, SHARK, 1);
+		fireInv(ItemID.COINS, 50_000, SHARK, 1);
 		Assert.assertEquals(800L, plugin.session.getTotalProfit());
 	}
 

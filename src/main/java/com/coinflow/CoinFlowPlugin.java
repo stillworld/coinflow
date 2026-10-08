@@ -245,10 +245,9 @@ public class CoinFlowPlugin extends Plugin
 
 	/**
 	 * Re-evaluates region suppression (e.g. the PvP tutorial arena) from the
-	 * loaded map regions. On exit, hold the re-baseline window open like an
-	 * interface close — the loaner strip can land across several container
-	 * events (inv, worn, rune pouch) and trailing removals must be baselined
-	 * rather than booked as losses.
+	 * loaded map regions. Both transitions schedule a re-baseline, and exiting
+	 * opens a short suppression window so the loaner strip's trailing removals
+	 * are baselined rather than booked as losses.
 	 */
 	void updateSuppressedRegion()
 	{
@@ -256,12 +255,7 @@ public class CoinFlowPlugin extends Plugin
 		{
 			return;
 		}
-		boolean wasSuppressed = interfaceTracker.isInSuppressedRegion();
 		interfaceTracker.updateSuppressedRegion(client.getTopLevelWorldView().getMapRegions());
-		if (wasSuppressed && !interfaceTracker.isInSuppressedRegion())
-		{
-			rebaselineGraceTicks = Math.max(rebaselineGraceTicks, 2);
-		}
 	}
 
 	/**
@@ -2537,6 +2531,9 @@ public class CoinFlowPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		// Age the region grace window before re-evaluating so a same-tick
+		// transition keeps its full window.
+		interfaceTracker.onGameTick();
 		updateSuppressedRegion();
 
 		if (session == null || !snapshotInitialized)

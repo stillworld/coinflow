@@ -93,6 +93,15 @@ public class InterfaceTracker
 	// ids, so this matches whether the arena is instanced or not.
 	static final Set<Integer> SUPPRESSED_REGIONS = Collections.singleton(10588);
 
+	/**
+	 * Ticks to keep suppressing after leaving a suppressed region. The
+	 * tutorial's exit strip can land across several events and containers
+	 * (worn, inv, rune pouch varbits) over a couple of ticks — a single-shot
+	 * re-baseline is consumed by the first event, so trailing removals would
+	 * leak through as supply expenses.
+	 */
+	private static final int SUPPRESSED_REGION_EXIT_GRACE_TICKS = 3;
+
 	// ── Death reclaim interface IDs ──────────────────────────────────────
 	// Subset of SUPPRESSED_INTERFACES where death-loss recoveries happen.
 	// Baselines are taken on open and settled on GameTick once none of these
@@ -149,6 +158,8 @@ public class InterfaceTracker
 	@Getter
 	private boolean inSuppressedRegion = false;
 
+	private int suppressedRegionGraceTicks = 0;
+
 	@Getter
 	@Setter
 	private boolean needsRebaseline = false;
@@ -169,6 +180,7 @@ public class InterfaceTracker
 		openShopInterfaces.clear();
 		trackingSuppressed = false;
 		inSuppressedRegion = false;
+		suppressedRegionGraceTicks = 0;
 		needsRebaseline = false;
 		previousGameState = currentGameState != null ? currentGameState : GameState.UNKNOWN;
 	}
@@ -176,11 +188,12 @@ public class InterfaceTracker
 	/**
 	 * True while tracking is suppressed — either an interface from
 	 * {@link #SUPPRESSED_INTERFACES} is open or the player is inside a
-	 * {@link #SUPPRESSED_REGIONS} region (e.g. the PvP tutorial arena).
+	 * {@link #SUPPRESSED_REGIONS} region (e.g. the PvP tutorial arena), or
+	 * within {@link #SUPPRESSED_REGION_EXIT_GRACE_TICKS} of leaving one.
 	 */
 	public boolean isTrackingSuppressed()
 	{
-		return trackingSuppressed || inSuppressedRegion;
+		return trackingSuppressed || inSuppressedRegion || suppressedRegionGraceTicks > 0;
 	}
 
 	/**
@@ -188,7 +201,8 @@ public class InterfaceTracker
 	 * Called on container events and game ticks so the check is applied at
 	 * diff time, not on scene-load ordering. Both transitions schedule a
 	 * re-baseline: the entry grant and the exit strip must be adopted as the
-	 * new baseline rather than diffed as gains/losses.
+	 * new baseline rather than diffed as gains/losses. Exiting additionally
+	 * opens a short suppression window that survives multiple events.
 	 */
 	public void updateSuppressedRegion(int[] mapRegions)
 	{
@@ -208,8 +222,23 @@ public class InterfaceTracker
 		{
 			inSuppressedRegion = inside;
 			needsRebaseline = true;
+			if (!inside)
+			{
+				suppressedRegionGraceTicks = SUPPRESSED_REGION_EXIT_GRACE_TICKS;
+			}
 			log.debug("{} a suppressed region, will re-baseline on next inventory event",
 				inside ? "Entered" : "Exited");
+		}
+	}
+
+	/**
+	 * Ages the post-exit region suppression window; call once per game tick.
+	 */
+	public void onGameTick()
+	{
+		if (suppressedRegionGraceTicks > 0)
+		{
+			suppressedRegionGraceTicks--;
 		}
 	}
 
