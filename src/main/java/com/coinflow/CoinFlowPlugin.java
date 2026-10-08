@@ -244,6 +244,27 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	/**
+	 * Re-evaluates region suppression (e.g. the PvP tutorial arena) from the
+	 * loaded map regions. On exit, hold the re-baseline window open like an
+	 * interface close — the loaner strip can land across several container
+	 * events (inv, worn, rune pouch) and trailing removals must be baselined
+	 * rather than booked as losses.
+	 */
+	void updateSuppressedRegion()
+	{
+		if (client == null || client.getTopLevelWorldView() == null)
+		{
+			return;
+		}
+		boolean wasSuppressed = interfaceTracker.isInSuppressedRegion();
+		interfaceTracker.updateSuppressedRegion(client.getTopLevelWorldView().getMapRegions());
+		if (wasSuppressed && !interfaceTracker.isInSuppressedRegion())
+		{
+			rebaselineGraceTicks = Math.max(rebaselineGraceTicks, 2);
+		}
+	}
+
+	/**
 	 * Parsed set of ignored item names (lowercase) from config.
 	 */
 	Set<String> ignoredItemNames;
@@ -517,7 +538,10 @@ public class CoinFlowPlugin extends Plugin
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
-		if (client != null && event.getActor() == client.getLocalPlayer())
+		if (client != null && event.getActor() == client.getLocalPlayer()
+			// Tutorial deaths (PvP tutorial arena) are staged — the loaner strip
+			// is already suppressed, so booking them would only add noise.
+			&& !interfaceTracker.isInSuppressedRegion())
 		{
 			// Capture BEFORE resetTransientTrackingState clears the looting
 			// bag/quiver caches — the pre-death state must reflect what was
@@ -535,6 +559,10 @@ public class CoinFlowPlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		// Evaluate region suppression at diff time, not on scene-load ordering —
+		// the tutorial's loaner grant/strip arrive as ordinary container diffs.
+		updateSuppressedRegion();
+
 		int containerId = event.getContainerId();
 
 		if (containerId == InventoryID.INV
@@ -2509,6 +2537,8 @@ public class CoinFlowPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		updateSuppressedRegion();
+
 		if (session == null || !snapshotInitialized)
 		{
 			pendingLootingBagPickups.clear();

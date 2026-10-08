@@ -86,6 +86,13 @@ public class InterfaceTracker
 		InterfaceID.DEADMANLOOT
 	)));
 
+	// ── Map regions that suppress tracking ───────────────────────────────
+	// The PvP tutorial arena (Pete Kayer, entered from Ferox Enclave) issues
+	// loaner gear and supplies on entry and strips them on exit — none of it
+	// is real profit or spend. Client#getMapRegions returns template region
+	// ids, so this matches whether the arena is instanced or not.
+	static final Set<Integer> SUPPRESSED_REGIONS = Collections.singleton(10588);
+
 	// ── Death reclaim interface IDs ──────────────────────────────────────
 	// Subset of SUPPRESSED_INTERFACES where death-loss recoveries happen.
 	// Baselines are taken on open and settled on GameTick once none of these
@@ -136,9 +143,11 @@ public class InterfaceTracker
 	@Getter
 	private final Set<Integer> openShopInterfaces = new HashSet<>();
 
-	@Getter
 	@Setter
 	private boolean trackingSuppressed = false;
+
+	@Getter
+	private boolean inSuppressedRegion = false;
 
 	@Getter
 	@Setter
@@ -159,8 +168,49 @@ public class InterfaceTracker
 		openSuppressedInterfaces.clear();
 		openShopInterfaces.clear();
 		trackingSuppressed = false;
+		inSuppressedRegion = false;
 		needsRebaseline = false;
 		previousGameState = currentGameState != null ? currentGameState : GameState.UNKNOWN;
+	}
+
+	/**
+	 * True while tracking is suppressed — either an interface from
+	 * {@link #SUPPRESSED_INTERFACES} is open or the player is inside a
+	 * {@link #SUPPRESSED_REGIONS} region (e.g. the PvP tutorial arena).
+	 */
+	public boolean isTrackingSuppressed()
+	{
+		return trackingSuppressed || inSuppressedRegion;
+	}
+
+	/**
+	 * Re-evaluates region suppression from the currently loaded map regions.
+	 * Called on container events and game ticks so the check is applied at
+	 * diff time, not on scene-load ordering. Both transitions schedule a
+	 * re-baseline: the entry grant and the exit strip must be adopted as the
+	 * new baseline rather than diffed as gains/losses.
+	 */
+	public void updateSuppressedRegion(int[] mapRegions)
+	{
+		boolean inside = false;
+		if (mapRegions != null)
+		{
+			for (int region : mapRegions)
+			{
+				if (SUPPRESSED_REGIONS.contains(region))
+				{
+					inside = true;
+					break;
+				}
+			}
+		}
+		if (inside != inSuppressedRegion)
+		{
+			inSuppressedRegion = inside;
+			needsRebaseline = true;
+			log.debug("{} a suppressed region, will re-baseline on next inventory event",
+				inside ? "Entered" : "Exited");
+		}
 	}
 
 	/**
