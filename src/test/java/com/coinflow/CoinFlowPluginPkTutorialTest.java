@@ -200,6 +200,30 @@ public class CoinFlowPluginPkTutorialTest
 		Assert.assertFalse(plugin.deathTracker.isPending());
 	}
 
+	/**
+	 * The 3-tick exit grace after leaving the arena exists to absorb the
+	 * loaner strip — a death inside it is equally staged and must not open
+	 * a pending death capture.
+	 */
+	@Test
+	public void deathDuringExitGrace_isNotTracked()
+	{
+		fireInv(ItemID.COINS, 50_000);
+		when(worldView.getMapRegions()).thenReturn(new int[]{TUTORIAL_REGION});
+		fireInv(ItemID.COINS, 50_000, WHIP, 1);
+		Assert.assertTrue(plugin.isTrackingSuppressed());
+
+		when(worldView.getMapRegions()).thenReturn(new int[]{FEROX_REGION});
+		fireInv(ItemID.COINS, 50_000); // strip baseline lands inside the grace window
+		Assert.assertTrue("Exit grace must still be suppressing", plugin.isTrackingSuppressed());
+
+		Player player = mock(Player.class);
+		when(client.getLocalPlayer()).thenReturn(player);
+		plugin.onActorDeath(new ActorDeath(player));
+
+		Assert.assertFalse(plugin.deathTracker.isPending());
+	}
+
 	// ── Helpers ──────────────────────────────────────────────────────────
 
 	private void fireInv(int... idQtyPairs)

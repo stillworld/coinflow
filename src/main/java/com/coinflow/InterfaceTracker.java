@@ -42,6 +42,12 @@ public class InterfaceTracker
 		InterfaceID.GE_PRICECHECKER,
 		InterfaceID.GE_PRICECHECKER_SIDE,
 		InterfaceID.GE_PRICELIST,
+		// Item sets exchange — the clerk's "Sets" interface is the only way to
+		// pack/unpack armour sets. The diff (-1 set, +4 components, or the
+		// reverse) lands while it is open; without suppression the components
+		// book as phantom profit (observed: a Dharok's unbox logged +3.6m).
+		InterfaceID.ITEMSETS,
+		InterfaceID.ITEMSETS_SIDE,
 
 		// Trades & Shops
 		InterfaceID.TRADEMAIN,
@@ -87,11 +93,44 @@ public class InterfaceTracker
 	)));
 
 	// ── Map regions that suppress tracking ───────────────────────────────
+	// IMPORTANT: only instanced or isolated template regions belong here.
+	// WorldView#getMapRegions returns every loaded region (~a 2-3 region
+	// halo around the player), so suppressing a real overworld region would
+	// also blind tracking for players merely standing near the minigame
+	// (e.g. Tithe Farm's region 7222 covers the Hosidius vinery — it is
+	// deliberately NOT here; its provided items are quarantined via
+	// MinigameQuarantine instead). Minigames on the overworld map that need
+	// quarantine use MinigameQuarantine.MINIGAME_HUD_INTERFACES.
+	//
 	// The PvP tutorial arena (Pete Kayer, entered from Ferox Enclave) issues
 	// loaner gear and supplies on entry and strips them on exit — none of it
 	// is real profit or spend. Client#getMapRegions returns template region
 	// ids, so this matches whether the arena is instanced or not.
-	static final Set<Integer> SUPPRESSED_REGIONS = Collections.singleton(10588);
+	static final Set<Integer> SUPPRESSED_REGIONS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+		10588, // PvP tutorial arena (Pete Kayer, Ferox Enclave)
+		7512,  // The Gauntlet / Corrupted Gauntlet dungeon — verified in game:
+		       // the instance loads as the single template region [7512].
+		       // GAUNTLET_OVERLAY/GAUNTLET_MAP HUD suppression covers it too.
+
+		// Last Man Standing match island — verified in game: loads as a
+		// 3x2 block far east of the map with no overworld regions in the
+		// halo. An in-match death booked a real "Death" row before these
+		// were added. LMS uses MULTIPLE arena maps — a later match loaded
+		// [13658, 13659, 13914, 13915], which sits inside the Wilderness
+		// bounding box and cannot be confirmed isolated, so it is NOT
+		// here; the LMS HUD groups (MinigameQuarantine) suppress matches
+		// on every map variant regardless.
+		14174, 14175, 14176,
+		14430, 14431, 14432
+		// The LMS lobby is deliberately NOT here: it sits north-east of
+		// Ferox Enclave, and its loaded halo [12344, 12345, 12600, 12601]
+		// contains the real Ferox/Wilderness overworld chunks — suppressing
+		// them would blind tracking for anyone standing in the enclave.
+		// Lobby suppression is HUD-based (MinigameQuarantine) instead.
+
+		// TODO in-game capture (see the "Map regions" debug line):
+		//   - Stealing Creation arena regions
+	)));
 
 	/**
 	 * Ticks to keep suppressing after leaving a suppressed region. The
@@ -160,6 +199,27 @@ public class InterfaceTracker
 
 	private int suppressedRegionGraceTicks = 0;
 
+	// Signature of the last seen map-region set — used to log region
+	// transitions once per scene load so new quarantine regions can be
+	// captured in game from the debug log.
+	private int lastMapRegionsSignature = 0;
+
+	// Most recently closed suppressed interface group. A set exchange can
+	// deliver its inventory packet a tick after the Sets interface closes,
+	// landing in the re-baseline path — this lets that diff still carry
+	// cost basis across the conversion. The record only stays valid for
+	// {@link #LAST_CLOSED_GROUP_VALID_TICKS}: without a bound, a stale record
+	// would let any later re-baseline window containing a "... set" item
+	// trigger a bogus cost-basis transfer.
+	private int lastClosedSuppressedGroupId = -1;
+
+	// Ticks the last-closed suppressed group stays identifiable. A late
+	// conversion packet lands within a tick or two of WidgetClosed, inside
+	// the ~2-tick re-baseline window armed on close.
+	private static final int LAST_CLOSED_GROUP_VALID_TICKS = 3;
+
+	private int lastClosedSuppressedGroupAge = LAST_CLOSED_GROUP_VALID_TICKS + 1;
+
 	@Getter
 	@Setter
 	private boolean needsRebaseline = false;
@@ -181,6 +241,9 @@ public class InterfaceTracker
 		trackingSuppressed = false;
 		inSuppressedRegion = false;
 		suppressedRegionGraceTicks = 0;
+		lastMapRegionsSignature = 0;
+		lastClosedSuppressedGroupId = -1;
+		lastClosedSuppressedGroupAge = LAST_CLOSED_GROUP_VALID_TICKS + 1;
 		needsRebaseline = false;
 		previousGameState = currentGameState != null ? currentGameState : GameState.UNKNOWN;
 	}
@@ -206,6 +269,15 @@ public class InterfaceTracker
 	 */
 	public void updateSuppressedRegion(int[] mapRegions)
 	{
+		if (mapRegions != null)
+		{
+			int signature = Arrays.hashCode(mapRegions);
+			if (signature != lastMapRegionsSignature)
+			{
+				lastMapRegionsSignature = signature;
+				log.debug("Map regions: {}", Arrays.toString(mapRegions));
+			}
+		}
 		boolean inside = false;
 		if (mapRegions != null)
 		{
@@ -240,6 +312,10 @@ public class InterfaceTracker
 		{
 			suppressedRegionGraceTicks--;
 		}
+		if (lastClosedSuppressedGroupAge <= LAST_CLOSED_GROUP_VALID_TICKS)
+		{
+			lastClosedSuppressedGroupAge++;
+		}
 	}
 
 	/**
@@ -266,6 +342,30 @@ public class InterfaceTracker
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * True while the Grand Exchange clerk's item-sets interface is open —
+	 * the only path for packing/unpacking sets, so inventory diffs in this
+	 * window are set↔component conversions. The side panel can linger after
+	 * the main interface, so either group counts.
+	 */
+	public boolean isItemsetsOpen()
+	{
+		return openSuppressedInterfaces.contains(InterfaceID.ITEMSETS)
+			|| openSuppressedInterfaces.contains(InterfaceID.ITEMSETS_SIDE);
+	}
+
+	/**
+	 * True if the most recently closed suppressed interface was the
+	 * item-sets interface — used to catch a conversion diff that arrives
+	 * one tick after the interface closed.
+	 */
+	public boolean wasLastClosedGroupItemsets()
+	{
+		return lastClosedSuppressedGroupAge <= LAST_CLOSED_GROUP_VALID_TICKS
+			&& (lastClosedSuppressedGroupId == InterfaceID.ITEMSETS
+			|| lastClosedSuppressedGroupId == InterfaceID.ITEMSETS_SIDE);
 	}
 
 	public void onWidgetLoaded(int groupId)
@@ -309,6 +409,8 @@ public class InterfaceTracker
 	{
 		if (openSuppressedInterfaces.remove(groupId))
 		{
+			lastClosedSuppressedGroupId = groupId;
+			lastClosedSuppressedGroupAge = 0;
 			if (openSuppressedInterfaces.isEmpty())
 			{
 				trackingSuppressed = false;
@@ -350,6 +452,8 @@ public class InterfaceTracker
 			openSuppressedInterfaces.clear();
 			openShopInterfaces.clear();
 			trackingSuppressed = false;
+			lastClosedSuppressedGroupId = -1;
+			lastClosedSuppressedGroupAge = LAST_CLOSED_GROUP_VALID_TICKS + 1;
 		}
 		else if (state == GameState.LOADING)
 		{
@@ -361,6 +465,8 @@ public class InterfaceTracker
 			openSuppressedInterfaces.clear();
 			openShopInterfaces.clear();
 			trackingSuppressed = false;
+			lastClosedSuppressedGroupId = -1;
+			lastClosedSuppressedGroupAge = LAST_CLOSED_GROUP_VALID_TICKS + 1;
 			log.debug("Game state -> {}, pausing tracking", state);
 		}
 

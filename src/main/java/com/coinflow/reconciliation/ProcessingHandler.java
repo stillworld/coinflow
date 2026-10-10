@@ -1,13 +1,12 @@
 package com.coinflow.reconciliation;
 
 import com.coinflow.CoinFlowSession;
+import com.coinflow.ItemPricing;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ItemComposition;
-import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 
 /**
@@ -322,22 +321,7 @@ public class ProcessingHandler implements ReconciliationHandler
 		int remainingSupplyQty = quantity - deductibleQty;
 		if (remainingSupplyQty > 0)
 		{
-			long price = itemManager.getItemPrice(itemId);
-			if (price <= 0)
-			{
-				if (itemId == ItemID.COINS)
-				{
-					price = 1;
-				}
-				else
-				{
-					ItemComposition comp = itemManager.getItemComposition(itemId);
-					if (comp != null)
-					{
-						price = comp.getHaPrice();
-					}
-				}
-			}
+			long price = ItemPricing.priceOf(itemId, itemManager);
 			CoinFlowSession.TrackedItem expenseItem = new CoinFlowSession.TrackedItem(
 				itemId, itemName, remainingSupplyQty, price
 			);

@@ -2,11 +2,14 @@ package com.coinflow;
 
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.time.Duration;
 import javax.inject.Inject;
 import net.runelite.api.MenuAction;
+import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.OverlayMenuEntry;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -30,6 +33,13 @@ public class CoinFlowOverlay extends OverlayPanel
 	private static final int MIN_PANEL_WIDTH = 140;
 	private static final int PANEL_PADDING = 16;
 	private static final int COLUMN_SPACING = 12;
+	private static final int COMPACT_MIN_PANEL_WIDTH = 110;
+	private static final int COMPACT_PANEL_PADDING = 8;
+	private static final int COMPACT_COLUMN_SPACING = 8;
+	private static final Rectangle STANDARD_PANEL_BORDER = new Rectangle(
+		ComponentConstants.STANDARD_BORDER, ComponentConstants.STANDARD_BORDER,
+		ComponentConstants.STANDARD_BORDER, ComponentConstants.STANDARD_BORDER);
+	private static final Rectangle COMPACT_PANEL_BORDER = new Rectangle(2, 2, 2, 2);
 
 	private final CoinFlowPlugin plugin;
 	private final CoinFlowConfig config;
@@ -70,24 +80,56 @@ public class CoinFlowOverlay extends OverlayPanel
 			? ComponentConstants.STANDARD_BACKGROUND_COLOR
 			: null);
 
-		boolean singleLine = config.overlayStyle() == CoinFlowConfig.OverlayStyle.SINGLE_LINE;
-		// A resized overlay's saved size is ignored in single-line mode, so hide the resize handles.
-		setResizable(!singleLine);
-		if (singleLine)
+		boolean compact = config.compactMode();
+		panelComponent.setBorder(compact ? COMPACT_PANEL_BORDER : STANDARD_PANEL_BORDER);
+
+		Font defaultFont = graphics.getFont();
+		if (compact)
 		{
-			return renderSingleLine(graphics, session, isIdle, includeAfk);
+			// runescape_small is a distinct font designed for compact text; shrinking the
+			// interface font to a fractional size rasterizes the bitmap-style font poorly
+			graphics.setFont(FontManager.getRunescapeSmallFont());
 		}
 
+		try
+		{
+			boolean singleLine = config.overlayStyle() == CoinFlowConfig.OverlayStyle.SINGLE_LINE;
+			// A resized overlay's saved size is ignored in single-line mode, so hide the resize handles.
+			setResizable(!singleLine);
+			if (singleLine)
+			{
+				return renderSingleLine(graphics, session, isIdle, includeAfk, compact);
+			}
+			return renderDetailed(graphics, session, isIdle, includeAfk, compact);
+		}
+		finally
+		{
+			graphics.setFont(defaultFont);
+		}
+	}
+
+	/**
+	 * Renders the multi-line "Detailed" display (profit, spent, GP/hr, time, goal bar).
+	 */
+	private Dimension renderDetailed(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk, boolean compact)
+	{
+		int minWidth = compact ? COMPACT_MIN_PANEL_WIDTH : MIN_PANEL_WIDTH;
+		int padding = compact ? COMPACT_PANEL_PADDING : PANEL_PADDING;
+		int columnSpacing = compact ? COMPACT_COLUMN_SPACING : COLUMN_SPACING;
+
 		FontMetrics fontMetrics = graphics.getFontMetrics();
-		int maxLineWidth = MIN_PANEL_WIDTH;
+		int maxLineWidth = minWidth;
 
 		// ── Title ────────────────────────────────────────────────────
-		String titleText = formatTitle(isIdle);
-		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(titleText));
-		panelComponent.getChildren().add(TitleComponent.builder()
-			.text(titleText)
-			.color(isIdle ? IDLE_COLOR : TITLE_COLOR)
-			.build());
+		if (!compact)
+		{
+			String titleText = formatTitle(isIdle);
+			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(titleText));
+			panelComponent.getChildren().add(TitleComponent.builder()
+				.text(titleText)
+				.color(isIdle ? IDLE_COLOR : TITLE_COLOR)
+				.build());
+		}
 
 		// ── Profit & Supplies (Dynamic Unified Display) ──────────────
 		boolean trackSpent = config.trackSpent();
@@ -97,7 +139,7 @@ public class CoinFlowOverlay extends OverlayPanel
 		String totalProfitRight = (totalProfit < 0 ? "-" : "") + formatGp(Math.abs(totalProfit)) + " gp";
 		Color profitColor = totalProfit < 0 ? LOSS_COLOR : PROFIT_COLOR;
 
-		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(profitLabel) + fontMetrics.stringWidth(totalProfitRight) + COLUMN_SPACING);
+		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(profitLabel) + fontMetrics.stringWidth(totalProfitRight) + columnSpacing);
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(profitLabel)
 			.leftColor(LABEL_COLOR)
@@ -110,7 +152,7 @@ public class CoinFlowOverlay extends OverlayPanel
 			String spentLeft = "Spent:";
 			String spentRight = (totalExpenses > 0 ? "-" : "") + formatGp(totalExpenses) + " gp";
 			Color spentColor = totalExpenses > 0 ? LOSS_COLOR : LABEL_COLOR;
-			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(spentLeft) + fontMetrics.stringWidth(spentRight) + COLUMN_SPACING);
+			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(spentLeft) + fontMetrics.stringWidth(spentRight) + columnSpacing);
 			panelComponent.getChildren().add(LineComponent.builder()
 				.left(spentLeft)
 				.leftColor(LABEL_COLOR)
@@ -124,7 +166,7 @@ public class CoinFlowOverlay extends OverlayPanel
 		String gpHrLeft = "GP/Hour:";
 		String gpHrRight = (gpPerHour < 0 ? "-" : "") + formatGp(Math.abs(gpPerHour)) + " gp/hr";
 		Color gpHrColor = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
-		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(gpHrLeft) + fontMetrics.stringWidth(gpHrRight) + COLUMN_SPACING);
+		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(gpHrLeft) + fontMetrics.stringWidth(gpHrRight) + columnSpacing);
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(gpHrLeft)
 			.leftColor(LABEL_COLOR)
@@ -136,7 +178,7 @@ public class CoinFlowOverlay extends OverlayPanel
 		Duration displayTime = session.getTime(includeAfk);
 		String timeLeft = "Time:";
 		String timeRight = formatTimeRight(displayTime, isIdle, includeAfk);
-		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(timeLeft) + fontMetrics.stringWidth(timeRight) + COLUMN_SPACING);
+		maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(timeLeft) + fontMetrics.stringWidth(timeRight) + columnSpacing);
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(timeLeft)
 			.leftColor(LABEL_COLOR)
@@ -184,7 +226,7 @@ public class CoinFlowOverlay extends OverlayPanel
 		}
 
 		// Dynamically size panel width to comfortably fit the widest line without awkward wrapping
-		panelComponent.setPreferredSize(new Dimension(maxLineWidth + PANEL_PADDING, 0));
+		panelComponent.setPreferredSize(new Dimension(maxLineWidth + padding, 0));
 
 		return super.render(graphics);
 	}
@@ -197,14 +239,14 @@ public class CoinFlowOverlay extends OverlayPanel
 	 * would stretch the background or wrap the line. Mirrors OverlayPanel's
 	 * preferred-color swap so the global "Overlay Color" setting still applies.
 	 */
-	private Dimension renderSingleLine(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk)
+	private Dimension renderSingleLine(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk, boolean compact)
 	{
 		long gpPerHour = config.trackSpent() ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
 		String text = formatCompactGpPerHour(gpPerHour);
 		Color color = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
 
 		FontMetrics fontMetrics = graphics.getFontMetrics();
-		panelComponent.setPreferredSize(new Dimension(fontMetrics.stringWidth(text) + PANEL_PADDING, 0));
+		panelComponent.setPreferredSize(new Dimension(fontMetrics.stringWidth(text) + (compact ? COMPACT_PANEL_PADDING : PANEL_PADDING), 0));
 		panelComponent.getChildren().add(LineComponent.builder()
 			.left(text)
 			.leftColor(color)

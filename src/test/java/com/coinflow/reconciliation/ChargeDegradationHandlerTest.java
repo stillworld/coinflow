@@ -651,4 +651,84 @@ public class ChargeDegradationHandlerTest
 		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Ancient page", "Ancient page 100"));
 		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Karil's crossbow 0", "Karil's crossbow"));
 	}
+
+	@Test
+	public void imbue_seersRing_cancelsGainAndLoss()
+	{
+		stubItem(6731, "Seers ring", 755000L);
+		stubItem(11770, "Seers ring (i)", 755203L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(11770, 1); // Seers ring (i) after NMZ imbue
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(6731, 1); // Seers ring consumed by the imbue
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, rawLosses, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Imbued ring must not be booked as profit", context.getRawGains().isEmpty());
+		Assert.assertTrue("Unimbued ring loss must not be booked as a drop/expense", context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void imbuePair_matchesSameBaseImbuedVariants()
+	{
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Seers ring", "Seers ring (i)"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Slayer helmet", "Slayer helmet (i)"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Salve amulet(i)", "Salve amulet(ei)"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Ring of suffering (r)", "Ring of suffering (ri)"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair("Salve amulet(e)", "Salve amulet(ei)"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Seers ring", "Berserker ring (i)"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Seers ring", "Seers ring"));
+		// (e)/(r) bases strip only when compared against an imbued twin —
+		// tradeable suffix items must never pair with their base form.
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Diamond bolts", "Diamond bolts (e)"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair("Salve amulet", "Salve amulet(e)"));
+	}
+
+	@Test
+	public void imbue_recoilVariant_cancelsGainAndLoss()
+	{
+		stubItem(20657, "Ring of suffering (r)", 150000L);
+		stubItem(20655, "Ring of suffering (ri)", 150000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(20655, 1); // Ring of suffering (ri) after the imbue
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(20657, 1); // Ring of suffering (r) consumed
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, rawLosses, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Recoil-imbued ring must not be booked as profit", context.getRawGains().isEmpty());
+		Assert.assertTrue("Unimbued ring loss must not be booked as a drop/expense", context.getRawLosses().isEmpty());
+	}
+
+	@Test
+	public void unmatchedImbuedGain_isSuppressed()
+	{
+		stubItem(11770, "Seers ring (i)", 755203L);
+		stubItem(20655, "Ring of suffering (ri)", 150000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(11770, 1); // Imbue gains landing on a later tick than the loss
+		rawGains.put(20655, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Imbued variant gains must be suppressed as conversion artifacts",
+			context.getRawGains().isEmpty());
+	}
 }

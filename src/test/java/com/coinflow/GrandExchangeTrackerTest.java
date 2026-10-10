@@ -5,7 +5,9 @@ import java.util.List;
 import java.util.Map;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.client.game.ItemManager;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
@@ -13,6 +15,7 @@ import org.junit.runner.RunWith;
 import org.mockito.junit.MockitoJUnitRunner;
 
 import static com.coinflow.TestHelpers.gains;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -654,5 +657,177 @@ public class GrandExchangeTrackerTest
 		Assert.assertEquals(0, tracker.basisQuantity(HELM));
 		Assert.assertTrue(changed(0,
 			offer(GrandExchangeOfferState.BOUGHT, HELM, 1, 1, 59000, 59000)).isEmpty());
+	}
+
+	// ── Item-set exchange basis transfer ───────────────────────────────
+
+	private static final int DHAROK_SET = 4718;
+	private static final int DHAROK_BODY = 4720;
+
+	private static ItemManager itemSetManager()
+	{
+		ItemManager im = mock(ItemManager.class);
+		when(im.canonicalize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+		ItemComposition setComp = mock(ItemComposition.class);
+		when(setComp.getName()).thenReturn("Dharok's armour set");
+		ItemComposition bodyComp = mock(ItemComposition.class);
+		when(bodyComp.getName()).thenReturn("Dharok's platebody");
+		ItemComposition genericComp = mock(ItemComposition.class);
+		when(genericComp.getName()).thenReturn("Shark");
+		when(im.getItemComposition(DHAROK_SET)).thenReturn(setComp);
+		when(im.getItemComposition(DHAROK_BODY)).thenReturn(bodyComp);
+		when(im.getItemComposition(SHARK)).thenReturn(genericComp);
+		when(im.getItemPrice(DHAROK_BODY)).thenReturn(1000000L);
+		return im;
+	}
+
+	private static Map<Integer, Integer> diff(int id, int qty)
+	{
+		return Collections.singletonMap(id, qty);
+	}
+
+	private static Map<Integer, Integer> diff(int id1, int qty1, int id2, int qty2)
+	{
+		Map<Integer, Integer> m = new java.util.HashMap<>();
+		m.put(id1, qty1);
+		m.put(id2, qty2);
+		return m;
+	}
+
+	@Test
+	public void setExchange_sameTickUnpack_movesBasisToComponents()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3000000);
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1), diff(DHAROK_BODY, 1), im, 10);
+
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_SET));
+		Assert.assertEquals(3_000_000L, tracker.repriceFromBasis(
+			expense(DHAROK_BODY, 1, 0), Collections.<Integer>emptySet())
+			.get(DHAROK_BODY).getPriceEach());
+	}
+
+	@Test
+	public void setExchange_splitLossThenGain_attachesStashedBasis()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3000000);
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1),
+			Collections.<Integer, Integer>emptyMap(), im, 10);
+		// Set's basis is stashed pending the produced side, not lost
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_SET));
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
+
+		tracker.transferSetExchangeBasis(Collections.<Integer, Integer>emptyMap(),
+			diff(DHAROK_BODY, 1), im, 11);
+
+		Assert.assertEquals(1, tracker.basisQuantity(DHAROK_BODY));
+		Assert.assertEquals(3_000_000L, tracker.repriceFromBasis(
+			expense(DHAROK_BODY, 1, 0), Collections.<Integer>emptySet())
+			.get(DHAROK_BODY).getPriceEach());
+	}
+
+	@Test
+	public void setExchange_splitGainThenLoss_attachesRetroactively()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3000000);
+
+		// Produced side first — remembered so the late consumed side attaches.
+		tracker.transferSetExchangeBasis(Collections.<Integer, Integer>emptyMap(),
+			diff(DHAROK_BODY, 1), im, 10);
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1),
+			Collections.<Integer, Integer>emptyMap(), im, 11);
+
+		Assert.assertEquals(1, tracker.basisQuantity(DHAROK_BODY));
+		Assert.assertEquals(3_000_000L, tracker.repriceFromBasis(
+			expense(DHAROK_BODY, 1, 0), Collections.<Integer>emptySet())
+			.get(DHAROK_BODY).getPriceEach());
+	}
+
+	@Test
+	public void setExchange_expiredPending_isNotAttachedToLaterGain()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3000000);
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1),
+			Collections.<Integer, Integer>emptyMap(), im, 10);
+		// Well past SET_BASIS_PENDING_TICKS — the stash must not attach.
+		tracker.transferSetExchangeBasis(Collections.<Integer, Integer>emptyMap(),
+			diff(DHAROK_BODY, 1), im, 20);
+
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
+	}
+
+	@Test
+	public void setExchange_unpackSetPresent_unrelatedLossKeepsBasis()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3000000);
+		tracker.addBasis(SHARK, 5, 5000);
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1, SHARK, 2),
+			diff(DHAROK_BODY, 1), im, 10);
+
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_SET));
+		Assert.assertEquals(5, tracker.basisQuantity(SHARK));
+		Assert.assertEquals(1, tracker.basisQuantity(DHAROK_BODY));
+	}
+
+	@Test
+	public void setExchange_noSetNoPending_isNoop()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(SHARK, 5, 5000);
+
+		tracker.transferSetExchangeBasis(diff(SHARK, 1), diff(HELM, 1), im, 10);
+
+		Assert.assertEquals(5, tracker.basisQuantity(SHARK));
+		Assert.assertEquals(0, tracker.basisQuantity(HELM));
+	}
+
+	@Test
+	public void setExchange_packSplit_componentLossThenSetGain()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_BODY, 1, 1_000_000);
+
+		// Packing loses the components first — no set in the loss diff, so
+		// the consumed cost is stashed pending the produced set.
+		tracker.transferSetExchangeBasis(diff(DHAROK_BODY, 1),
+			Collections.<Integer, Integer>emptyMap(), im, 10);
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
+
+		tracker.transferSetExchangeBasis(Collections.<Integer, Integer>emptyMap(),
+			diff(DHAROK_SET, 1), im, 11);
+
+		Assert.assertEquals(1, tracker.basisQuantity(DHAROK_SET));
+		Assert.assertEquals(1_000_000L, tracker.repriceFromBasis(
+			expense(DHAROK_SET, 1, 0), Collections.<Integer>emptySet())
+			.get(DHAROK_SET).getPriceEach());
+	}
+
+	@Test
+	public void setExchange_reset_clearsPendingState()
+	{
+		ItemManager im = itemSetManager();
+		tracker.addBasis(DHAROK_SET, 1, 3_000_000);
+
+		tracker.transferSetExchangeBasis(diff(DHAROK_SET, 1),
+			Collections.<Integer, Integer>emptyMap(), im, 10);
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_SET));
+
+		// A session reset must not let the stashed 3m resurrect onto a
+		// post-reset gain.
+		tracker.reset();
+		tracker.transferSetExchangeBasis(Collections.<Integer, Integer>emptyMap(),
+			diff(DHAROK_BODY, 1), im, 11);
+
+		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
 	}
 }

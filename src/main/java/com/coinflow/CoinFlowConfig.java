@@ -111,7 +111,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigItem(
 		keyName = "compactMode",
 		name = "Compact Mode",
-		description = "Display a streamlined, compact view in the side panel",
+		description = "Display a streamlined, compact view in the side panel and shrink the overlay HUD",
 		section = displaySection,
 		position = 4
 	)
@@ -367,6 +367,18 @@ public interface CoinFlowConfig extends Config
 		position = 5
 	)
 	default boolean countDropsAsSpent()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "trackUntradeableItems",
+		name = "Track Untradeable Items",
+		description = "Value untradeable items at their high alchemy price when gained. When off, untradeable items are invisible until converted to cash (e.g. high alchemy), at which point the proceeds count as profit.",
+		section = advancedSection,
+		position = 6
+	)
+	default boolean trackUntradeableItems()
 	{
 		return false;
 	}

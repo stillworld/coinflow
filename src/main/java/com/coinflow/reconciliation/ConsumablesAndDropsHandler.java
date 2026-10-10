@@ -2,9 +2,9 @@ package com.coinflow.reconciliation;
 
 import com.coinflow.CoinFlowSession;
 import com.coinflow.ConsumableRegistry;
+import com.coinflow.ItemPricing;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ItemComposition;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 
@@ -49,7 +49,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 			// losses (quest hand-ins, Destroy, death) keep the legacy path.
 			if (context.isDropsAsSpent() && context.isDropIntent(itemId))
 			{
-				long price = priceOf(itemId, itemManager);
+				long price = ItemPricing.priceOf(itemId, itemManager);
 				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 				context.getRecentlyExpensedDrops().merge(itemId, quantity, Integer::sum);
 				retireSessionGain(context, session, itemId, quantity);
@@ -86,7 +86,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 
 			if (isConsumable)
 			{
-				long price = priceOf(itemId, itemManager);
+				long price = ItemPricing.priceOf(itemId, itemManager);
 
 				CoinFlowSession.TrackedItem expenseItem =
 					new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
@@ -196,26 +196,4 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 		}
 	}
 
-	/**
-	 * Market price with the same fallbacks used for gains: GE price, then the
-	 * fixed coin/platinum values, then high alchemy for untradeables.
-	 */
-	private static long priceOf(int itemId, ItemManager itemManager)
-	{
-		long price = itemManager.getItemPrice(itemId);
-		if (price > 0)
-		{
-			return price;
-		}
-		if (itemId == ItemID.COINS)
-		{
-			return 1;
-		}
-		if (itemId == ItemID.PLATINUM)
-		{
-			return 1000;
-		}
-		ItemComposition comp = itemManager.getItemComposition(itemId);
-		return comp != null ? comp.getHaPrice() : 0;
-	}
 }

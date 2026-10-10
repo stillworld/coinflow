@@ -1,16 +1,20 @@
 package com.coinflow;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.GrandExchangeOffer;
 import net.runelite.api.GrandExchangeOfferState;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.client.game.ItemManager;
 
 /**
  * Tracks Grand Exchange offers and settles completed fills against the session's
@@ -400,10 +404,241 @@ public final class GrandExchangeTracker
 		return result;
 	}
 
+	/**
+	 * Consumed-side cost basis waiting for the produced side of a set exchange
+	 * that arrived split across container events, plus the mirror image:
+	 * produced items seen before their consumed side. Basis is keyed by item
+	 * id, so a late half can attach retroactively. Bounded by
+	 * {@link #SET_BASIS_PENDING_TICKS} so a stalled stash cannot leak onto an
+	 * unrelated later gain.
+	 */
+	private static final int SET_BASIS_PENDING_TICKS = 5;
+
+	private long pendingSetExchangeCost = 0;
+	private Map<Integer, Integer> pendingSetExchangeGains = null;
+	private int pendingSetExchangeTick = -1;
+
+	/**
+	 * Moves cost basis across a clerk item-set exchange. Packing or unpacking a
+	 * set is an asset recomposition, not a gain or loss, so basis held on the
+	 * consumed side (the set when unpacking, the components when packing) is
+	 * re-attached to the produced items — allocated pro-rata by market value so
+	 * the totals still sum to the original cost and each piece later sells at
+	 * its true margin. Only fires when the diff actually contains a set item
+	 * (name check on either side) or completes a stashed half of a split
+	 * conversion, leaving ordinary suppressed diffs alone.
+	 */
+	void transferSetExchangeBasis(Map<Integer, Integer> losses, Map<Integer, Integer> gains,
+		ItemManager itemManager, int currentTick)
+	{
+		if (losses == null || gains == null)
+		{
+			return;
+		}
+		if (pendingSetExchangeTick >= 0 && currentTick - pendingSetExchangeTick > SET_BASIS_PENDING_TICKS)
+		{
+			clearPendingSetExchange();
+		}
+		if (losses.isEmpty() && gains.isEmpty())
+		{
+			// An empty diff is not conversion traffic — leave any stashed
+			// split-conversion half alone.
+			return;
+		}
+
+		// One-sided diffs may be halves of a conversion whose other half lands
+		// in a separate container event. The call site is already scoped to
+		// the itemsets window (interface open or just closed), so they
+		// participate unconditionally: consumed-side basis is stashed for a
+		// later produced side, and a produced side seen first is remembered so
+		// a late consumed side can attach retroactively (basis is keyed by
+		// item id, not inventory position).
+		if (gains.isEmpty())
+		{
+			long cost = consumeConversionBasis(losses, itemManager);
+			if (cost > 0)
+			{
+				pendingSetExchangeCost += cost;
+				pendingSetExchangeTick = currentTick;
+			}
+			if (pendingSetExchangeCost > 0 && pendingSetExchangeGains != null)
+			{
+				allocateProducedBasis(pendingSetExchangeGains, pendingSetExchangeCost, itemManager);
+				clearPendingSetExchange();
+			}
+			else if (cost <= 0 && pendingSetExchangeCost <= 0 && pendingSetExchangeGains != null)
+			{
+				// The produced side arrived earlier and the consumed side
+				// carried no basis — conversion complete, nothing to move.
+				clearPendingSetExchange();
+			}
+			return;
+		}
+
+		if (losses.isEmpty())
+		{
+			if (pendingSetExchangeCost > 0)
+			{
+				allocateProducedBasis(mergeGains(gains), pendingSetExchangeCost, itemManager);
+				clearPendingSetExchange();
+				return;
+			}
+			if (pendingSetExchangeGains == null)
+			{
+				pendingSetExchangeGains = new HashMap<>();
+			}
+			gains.forEach((id, qty) -> pendingSetExchangeGains.merge(id, qty, Integer::sum));
+			pendingSetExchangeTick = currentTick;
+			return;
+		}
+
+		// A full-diff (or pending-completing) conversion only counts when a
+		// "... set" item actually participates — ordinary both-sides diffs in
+		// the window keep their own accounting.
+		boolean hasPending = pendingSetExchangeCost > 0 || pendingSetExchangeGains != null;
+		if (!hasPending && !containsSetItem(losses, itemManager) && !containsSetItem(gains, itemManager))
+		{
+			return;
+		}
+
+		long totalCost = pendingSetExchangeCost + consumeConversionBasis(losses, itemManager);
+		if (totalCost > 0)
+		{
+			allocateProducedBasis(mergeGains(gains), totalCost, itemManager);
+		}
+		clearPendingSetExchange();
+	}
+
+	/**
+	 * Combines the diff's produced items with any stashed produced-side items
+	 * from an earlier split event.
+	 */
+	private Map<Integer, Integer> mergeGains(Map<Integer, Integer> gains)
+	{
+		if (pendingSetExchangeGains == null)
+		{
+			return gains;
+		}
+		Map<Integer, Integer> merged = new HashMap<>(gains);
+		pendingSetExchangeGains.forEach((id, qty) -> merged.merge(id, qty, Integer::sum));
+		return merged;
+	}
+
+	private void clearPendingSetExchange()
+	{
+		pendingSetExchangeCost = 0;
+		pendingSetExchangeGains = null;
+		pendingSetExchangeTick = -1;
+	}
+
+	/**
+	 * Drains cost basis from the consumed side of a conversion. When the
+	 * losses contain a set item (unpacking), only the set's basis moves —
+	 * unrelated losses sharing the diff keep theirs. When no set item is on
+	 * the loss side (packing, or the consumed half of a split diff), every
+	 * non-coin loss is a conversion input and its basis is consumed.
+	 */
+	private long consumeConversionBasis(Map<Integer, Integer> losses, ItemManager itemManager)
+	{
+		boolean lossHasSet = containsSetItem(losses, itemManager);
+		long totalCost = 0;
+		for (Map.Entry<Integer, Integer> e : losses.entrySet())
+		{
+			int id = itemManager != null ? itemManager.canonicalize(e.getKey()) : e.getKey();
+			if (id == ItemID.COINS || (lossHasSet && !isSetItem(e.getKey(), itemManager)))
+			{
+				continue;
+			}
+			totalCost += consumeBasis(id, e.getValue())[1];
+		}
+		return totalCost;
+	}
+
+	/**
+	 * Re-attaches consumed cost basis onto produced items, pro-rata by market
+	 * value (equal shares when no market data). Coins are never a conversion
+	 * product and must not absorb item cost basis.
+	 */
+	private void allocateProducedBasis(Map<Integer, Integer> gains, long totalCost, ItemManager itemManager)
+	{
+		List<Map.Entry<Integer, Integer>> entries = new ArrayList<>();
+		for (Map.Entry<Integer, Integer> e : gains.entrySet())
+		{
+			int id = itemManager != null ? itemManager.canonicalize(e.getKey()) : e.getKey();
+			if (id != ItemID.COINS)
+			{
+				entries.add(e);
+			}
+		}
+		if (entries.isEmpty())
+		{
+			return;
+		}
+
+		long[] values = new long[entries.size()];
+		long totalValue = 0;
+		for (int i = 0; i < entries.size(); i++)
+		{
+			Map.Entry<Integer, Integer> e = entries.get(i);
+			int id = itemManager != null ? itemManager.canonicalize(e.getKey()) : e.getKey();
+			long price = itemManager != null ? Math.max(0L, itemManager.getItemPrice(id)) : 0L;
+			values[i] = price * Math.max(0, e.getValue());
+			totalValue += values[i];
+		}
+
+		long allocated = 0;
+		for (int i = 0; i < entries.size(); i++)
+		{
+			Map.Entry<Integer, Integer> e = entries.get(i);
+			int id = itemManager != null ? itemManager.canonicalize(e.getKey()) : e.getKey();
+			long share = i == entries.size() - 1
+				? totalCost - allocated
+				: (totalValue > 0 ? totalCost * values[i] / totalValue : totalCost / entries.size());
+			allocated += share;
+			addBasis(id, Math.max(1, e.getValue()), share);
+		}
+
+		log.debug("Item-set exchange: moved {} gp of cost basis onto {} produced item(s)",
+			totalCost, entries.size());
+	}
+
+	private static boolean containsSetItem(Map<Integer, Integer> diff, ItemManager itemManager)
+	{
+		for (int id : diff.keySet())
+		{
+			if (isSetItem(id, itemManager))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A Grand Exchange set item is named "... set", optionally with a variant
+	 * suffix — "Rune armour set (lg)", "Dharok's armour set".
+	 */
+	private static boolean isSetItem(int rawId, ItemManager itemManager)
+	{
+		if (itemManager == null)
+		{
+			return false;
+		}
+		ItemComposition comp = itemManager.getItemComposition(itemManager.canonicalize(rawId));
+		String name = comp != null ? comp.getName() : null;
+		if (name == null)
+		{
+			return false;
+		}
+		String n = name.toLowerCase(Locale.ROOT);
+		return n.endsWith(" set") || (n.endsWith(")") && n.contains(" set ("));
+	}
+
 	void reset()
 	{
 		observedOffers.clear();
 		costBasis.clear();
+		clearPendingSetExchange();
 	}
 
 	/**

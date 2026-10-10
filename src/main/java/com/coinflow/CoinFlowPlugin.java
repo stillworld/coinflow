@@ -210,7 +210,73 @@ public class CoinFlowPlugin extends Plugin
 
 	boolean isTrackingSuppressed()
 	{
-		return interfaceTracker.isTrackingSuppressed();
+		return interfaceTracker.isTrackingSuppressed() || minigameHudVisible || minigameHudGraceTicks > 0;
+	}
+
+	/**
+	 * Latched visibility of any {@link MinigameQuarantine#MINIGAME_HUD_INTERFACES}
+	 * HUD. Latched in {@link #updateSuppressedRegion()} (runs on every container
+	 * event and game tick) so the transition can schedule a re-baseline and an
+	 * exit grace window just like {@link InterfaceTracker#SUPPRESSED_REGIONS}.
+	 * Evaluated by live widget visibility rather than WidgetLoaded/Closed, so a
+	 * group that stays loaded-but-hidden cannot wedge suppression on permanently,
+	 * and a missed close event cannot strand it either. Used for minigames on the
+	 * normal overworld map (e.g. Tempoross) where region suppression's load halo
+	 * would blind nearby players' tracking.
+	 */
+	private boolean minigameHudVisible = false;
+
+	/**
+	 * Ticks to keep suppressing after a minigame HUD disappears — the exit strip
+	 * (e.g. Tempoross's loaned tools) can land across several container events.
+	 */
+	private int minigameHudGraceTicks = 0;
+
+	private static final int MINIGAME_HUD_EXIT_GRACE_TICKS = 3;
+
+	/**
+	 * Removes minigame-only items ({@link MinigameQuarantine#MINIGAME_ONLY_ITEMS})
+	 * from a gains/losses diff pair. These items cannot legally exist outside
+	 * their minigame, so any diff containing them — including the exit strip
+	 * landing outside a suppressed region — is definitionally non-economic.
+	 */
+	private void stripNonEconomicItems(Map<Integer, Integer> gains, Map<Integer, Integer> losses)
+	{
+		stripNonEconomicItems(gains, "gain");
+		stripNonEconomicItems(losses, "loss");
+	}
+
+	private void stripNonEconomicItems(Map<Integer, Integer> diff, String direction)
+	{
+		Iterator<Map.Entry<Integer, Integer>> it = diff.entrySet().iterator();
+		while (it.hasNext())
+		{
+			Map.Entry<Integer, Integer> entry = it.next();
+			int canonicalId = itemManager != null ? itemManager.canonicalize(entry.getKey()) : entry.getKey();
+			if (MinigameQuarantine.isMinigameOnlyItem(canonicalId))
+			{
+				it.remove();
+				log.debug("Quarantined minigame item {} x{} ({} — cannot exist outside its minigame)",
+					entry.getKey(), entry.getValue(), direction);
+			}
+			else if (ItemPricing.isValueless(canonicalId))
+			{
+				it.remove();
+				log.debug("Stripped valueless item {} x{} ({} — untradeable and unalchable)",
+					entry.getKey(), entry.getValue(), direction);
+			}
+			else if (!untradeableTrackingEnabled() && ItemPricing.isUnpricedUntradeable(canonicalId, itemManager))
+			{
+				it.remove();
+				log.debug("Stripped unpriced untradeable {} x{} ({} — Track Untradeable Items off)",
+					entry.getKey(), entry.getValue(), direction);
+			}
+		}
+	}
+
+	private boolean untradeableTrackingEnabled()
+	{
+		return config == null || config.trackUntradeableItems();
 	}
 
 	void setTrackingSuppressed(boolean suppressed)
@@ -256,6 +322,38 @@ public class CoinFlowPlugin extends Plugin
 			return;
 		}
 		interfaceTracker.updateSuppressedRegion(client.getTopLevelWorldView().getMapRegions());
+		updateMinigameHudSuppression();
+	}
+
+	/**
+	 * Re-evaluates minigame HUD suppression from live widget visibility. Both
+	 * transitions schedule a re-baseline, and the HUD disappearing opens a
+	 * short grace window so a trailing exit strip (e.g. Tempoross's loaned
+	 * tools) is baselined rather than booked as losses.
+	 */
+	private void updateMinigameHudSuppression()
+	{
+		boolean visible = false;
+		for (int groupId : MinigameQuarantine.MINIGAME_HUD_INTERFACES)
+		{
+			Widget hud = client.getWidget(groupId, 0);
+			if (hud != null && !hud.isHidden())
+			{
+				visible = true;
+				break;
+			}
+		}
+		if (visible != minigameHudVisible)
+		{
+			minigameHudVisible = visible;
+			setNeedsRebaseline(true);
+			if (!visible)
+			{
+				minigameHudGraceTicks = MINIGAME_HUD_EXIT_GRACE_TICKS;
+			}
+			log.debug("{} a minigame HUD, {} tracking", visible ? "Opened" : "Closed",
+				visible ? "suppressing" : "resuming after grace");
+		}
 	}
 
 	/**
@@ -533,9 +631,12 @@ public class CoinFlowPlugin extends Plugin
 	public void onActorDeath(ActorDeath event)
 	{
 		if (client != null && event.getActor() == client.getLocalPlayer()
-			// Tutorial deaths (PvP tutorial arena) are staged — the loaner strip
-			// is already suppressed, so booking them would only add noise.
-			&& !interfaceTracker.isInSuppressedRegion())
+			// Deaths inside quarantine minigames (PvP tutorial arena, Tempoross,
+			// Gauntlet HUD) are staged content — the loaner strip is already
+			// suppressed, so booking them would only add noise. The exit-grace
+			// windows count too: a death while the strip is still landing would
+			// capture loaner items into the loss.
+			&& !isTrackingSuppressed())
 		{
 			// Capture BEFORE resetTransientTrackingState clears the looting
 			// bag/quiver caches — the pre-death state must reflect what was
@@ -592,7 +693,7 @@ public class CoinFlowPlugin extends Plugin
 				return;
 			}
 
-			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
+			if (isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0)
 			{
 				previousEquipmentSnapshot = currentEquip;
 				pendingWornAmmoExpenses.clear();
@@ -607,6 +708,11 @@ public class CoinFlowPlugin extends Plugin
 			{
 				Map<Integer, Integer> removedFromEquip = previousEquipmentSnapshot.getGainedItems(currentEquip);
 				Map<Integer, Integer> addedToEquip = currentEquip.getGainedItems(previousEquipmentSnapshot);
+
+				// Minigame-only items can be equipped (e.g. Soul Wars team
+				// capes) — hide them before degradation pairing and the
+				// ammo/crumbled-jewelry checks so they never book an expense.
+				stripNonEconomicItems(addedToEquip, removedFromEquip);
 
 				// Reconcile items that degraded directly in equipment (e.g. worn Slayer ring (3) -> (2), Barrows degradation)
 				// These did not move to or from inventory.
@@ -741,7 +847,14 @@ public class CoinFlowPlugin extends Plugin
 				Map<Integer, Integer> gained = currentSnap.getGainedItems(previousInventorySnapshot);
 				for (Map.Entry<Integer, Integer> entry : gained.entrySet())
 				{
-					invItemsGainedThisTick.merge(entry.getKey(), entry.getValue(), Integer::sum);
+					int canonicalId = itemManager != null ? itemManager.canonicalize(entry.getKey()) : entry.getKey();
+					if (!MinigameQuarantine.isMinigameOnlyItem(canonicalId)
+						&& !ItemPricing.isValueless(canonicalId)
+						&& (untradeableTrackingEnabled()
+							|| !ItemPricing.isUnpricedUntradeable(canonicalId, itemManager)))
+					{
+						invItemsGainedThisTick.merge(entry.getKey(), entry.getValue(), Integer::sum);
+					}
 				}
 			}
 			processInventoryChanges(event.getItemContainer());
@@ -830,8 +943,19 @@ public class CoinFlowPlugin extends Plugin
 		}
 
 		// If bank or trading interface is actively open, suppress tracking and update baseline
-		if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen())
+		if (isTrackingSuppressed() || isBankOrContainerOpen())
 		{
+			// The clerk's Sets interface suppresses the set<->components swap
+			// like any other conversion, but the produced items must inherit
+			// the consumed side's cost basis or they sell as untracked income.
+			if (interfaceTracker.isItemsetsOpen()
+				&& previousInventorySnapshot != null && snapshotInitialized)
+			{
+				grandExchangeTracker.transferSetExchangeBasis(
+					currentSnapshot.getLostItems(previousInventorySnapshot),
+					currentSnapshot.getGainedItems(previousInventorySnapshot),
+					itemManager, client != null ? client.getTickCount() : 0);
+			}
 			previousInventorySnapshot = currentSnapshot;
 			return;
 		}
@@ -846,6 +970,10 @@ public class CoinFlowPlugin extends Plugin
 			{
 				rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
 				rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+				// Minigame-only items are invisible everywhere — including
+				// inside a re-baseline window, where one arriving must not
+				// promote baseline noise into a processed diff or a purchase.
+				stripNonEconomicItems(rawGains, rawLosses);
 				// A death-drop pickup inside a re-baseline window is still a
 				// recovery — reverse the Death charge before the gain is
 				// swallowed by the baseline.
@@ -891,6 +1019,15 @@ public class CoinFlowPlugin extends Plugin
 
 			if (!isProcessing)
 			{
+				// A set<->components conversion whose packet arrived after the
+				// Sets interface closed is swallowed by this baseline — still
+				// carry its cost basis across. (Only when the diff is actually
+				// baselined: a processed diff owns its own accounting.)
+				if (interfaceTracker.wasLastClosedGroupItemsets())
+				{
+					grandExchangeTracker.transferSetExchangeBasis(rawLosses, rawGains,
+						itemManager, client != null ? client.getTickCount() : 0);
+				}
 				// A purchase landing inside a re-baseline window (e.g. Zaff's
 				// daily battlestaves bought right after a login or bank close)
 				// is a real transaction, not baseline noise — swallowing it
@@ -947,6 +1084,11 @@ public class CoinFlowPlugin extends Plugin
 		{
 			Map<Integer, Integer> rawGains = currentSnapshot.getGainedItems(previousInventorySnapshot);
 			Map<Integer, Integer> rawLosses = currentSnapshot.getLostItems(previousInventorySnapshot);
+
+			// Minigame-only items (CW bandages, BA eggs, NMZ potions, GOTR
+			// cells, Tithe seeds, ...) can never exist outside their minigame,
+			// so both their grant and their exit strip are invisible here.
+			stripNonEconomicItems(rawGains, rawLosses);
 
 			// Wilderness death-drop pickups carrying a Take click reverse the
 			// Death charge rather than counting as fresh loot.
@@ -1143,15 +1285,7 @@ public class CoinFlowPlugin extends Plugin
 					int itemId = entry.getKey();
 					int quantity = entry.getValue();
 					String itemName = getItemName(itemId);
-					long price = itemManager != null ? itemManager.getItemPrice(itemId) : 0;
-					if (price <= 0 && itemManager != null)
-					{
-						ItemComposition comp = itemManager.getItemComposition(itemId);
-						if (comp != null)
-						{
-							price = comp.getHaPrice();
-						}
-					}
+					long price = ItemPricing.priceOf(itemId, itemManager);
 					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 					log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
 					removeRecentlyUnequipped(itemId, quantity);
@@ -1265,7 +1399,7 @@ public class CoinFlowPlugin extends Plugin
 				}
 				return;
 			}
-			boolean trackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+			boolean trackingAllowed = !isTrackingSuppressed() && !isBankOrContainerOpen()
 				&& !interfaceTracker.isShopOpen()
 				&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0
 				&& !deathTracker.isPending();
@@ -2534,6 +2668,34 @@ public class CoinFlowPlugin extends Plugin
 		// Age the region grace window before re-evaluating so a same-tick
 		// transition keeps its full window.
 		interfaceTracker.onGameTick();
+
+		// Age the HUD and re-baseline grace windows the same way — BEFORE
+		// updateSuppressedRegion latches any fresh transition (so it keeps
+		// its full window), and BEFORE the snapshot guard below: if the
+		// login baseline never initialized (e.g. the inventory container
+		// was null mid-load), an early return would freeze them open and
+		// wedge tracking suppression on permanently.
+		if (minigameHudGraceTicks > 0)
+		{
+			minigameHudGraceTicks--;
+		}
+		if (rebaselineGraceTicks > 0)
+		{
+			rebaselineGraceTicks--;
+			if (rebaselineGraceTicks == 0 && interfaceTracker.isNeedsRebaseline())
+			{
+				interfaceTracker.setNeedsRebaseline(false);
+				if (client != null && snapshotInitialized)
+				{
+					ItemContainer inv = client.getItemContainer(InventoryID.INV);
+					if (inv != null)
+					{
+						previousInventorySnapshot = takeInventorySnapshot(inv);
+					}
+				}
+			}
+		}
+
 		updateSuppressedRegion();
 
 		if (session == null || !snapshotInitialized)
@@ -2684,7 +2846,7 @@ public class CoinFlowPlugin extends Plugin
 		// consumed without inventory changes
 		if (!pendingWornAmmoExpenses.isEmpty())
 		{
-			if (interfaceTracker.isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0 || deathTracker.isPending())
+			if (isTrackingSuppressed() || isBankOrContainerOpen() || interfaceTracker.isShopOpen() || interfaceTracker.isNeedsRebaseline() || rebaselineGraceTicks > 0 || deathTracker.isPending())
 			{
 				pendingWornAmmoExpenses.clear();
 			}
@@ -2696,15 +2858,7 @@ public class CoinFlowPlugin extends Plugin
 					int itemId = entry.getKey();
 					int quantity = entry.getValue();
 					String itemName = getItemName(itemId);
-					long price = itemManager != null ? itemManager.getItemPrice(itemId) : 0;
-					if (price <= 0 && itemManager != null)
-					{
-						ItemComposition comp = itemManager.getItemComposition(itemId);
-						if (comp != null)
-						{
-							price = comp.getHaPrice();
-						}
-					}
+					long price = ItemPricing.priceOf(itemId, itemManager);
 					wornAmmoExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 					log.debug("Consumed equipped ammo/jewelry on tick: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
 					removeRecentlyUnequipped(itemId, quantity);
@@ -2715,7 +2869,7 @@ public class CoinFlowPlugin extends Plugin
 		}
 
 		// Finalize pending charge-based supply costs (runes/scales/shards stored inside weapons)
-		boolean chargeTrackingAllowed = !interfaceTracker.isTrackingSuppressed() && !isBankOrContainerOpen()
+		boolean chargeTrackingAllowed = !isTrackingSuppressed() && !isBankOrContainerOpen()
 			&& !interfaceTracker.isShopOpen()
 			&& !interfaceTracker.isNeedsRebaseline() && rebaselineGraceTicks <= 0
 			&& !deathTracker.isPending();
@@ -2761,15 +2915,7 @@ public class CoinFlowPlugin extends Plugin
 				int itemId = entry.getKey();
 				int quantity = entry.getValue();
 				String itemName = getItemName(itemId);
-				long price = itemId == ItemID.COINS ? 1 : (itemManager != null ? itemManager.getItemPrice(itemId) : 0);
-				if (price <= 0 && itemManager != null)
-				{
-					ItemComposition comp = itemManager.getItemComposition(itemId);
-					if (comp != null)
-					{
-						price = comp.getHaPrice();
-					}
-				}
+				long price = ItemPricing.priceOf(itemId, itemManager);
 				chargeExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 				log.debug("Consumed weapon charge resource on tick: {} x{} @ {} gp", itemName, quantity, price);
 			}
@@ -2812,24 +2958,6 @@ public class CoinFlowPlugin extends Plugin
 				session.getActiveTime().getSeconds(), session.getTotalInGameTime().getSeconds(),
 				session.getGrossProfit(), session.getTotalExpenses(),
 				session.getGpPerHour(config.includeAfkTime()), session.isIdle());
-		}
-
-		// Decrement rebaseline grace window after interface closures
-		if (rebaselineGraceTicks > 0)
-		{
-			rebaselineGraceTicks--;
-			if (rebaselineGraceTicks == 0 && interfaceTracker.isNeedsRebaseline())
-			{
-				interfaceTracker.setNeedsRebaseline(false);
-				if (client != null && snapshotInitialized)
-				{
-					ItemContainer inv = client.getItemContainer(InventoryID.INV);
-					if (inv != null)
-					{
-						previousInventorySnapshot = takeInventorySnapshot(inv);
-					}
-				}
-			}
 		}
 
 		// Evict dropped item records older than 600 ticks (~6 minutes) to prevent memory leak and stale pickup matching
@@ -3157,6 +3285,7 @@ public class CoinFlowPlugin extends Plugin
 		deathTracker.discardPending();
 		interfaceTracker.setNeedsRebaseline(false);
 		rebaselineGraceTicks = 0;
+		minigameHudGraceTicks = 0;
 		weaponChargeTracker.reset();
 		pendingWornAmmoExpenses.clear();
 
@@ -3751,27 +3880,7 @@ public class CoinFlowPlugin extends Plugin
 			}
 
 			// Look up price (Fixes Bug 7: coins and platinum tokens)
-			long price = itemManager.getItemPrice(itemId);
-			if (price <= 0)
-			{
-				if (itemId == ItemID.COINS)
-				{
-					price = 1;
-				}
-				else if (itemId == ItemID.PLATINUM)
-				{
-					price = 1000;
-				}
-				else
-				{
-					// Fallback to high alchemy value for untradeable items
-					ItemComposition comp = itemManager.getItemComposition(itemId);
-					if (comp != null)
-					{
-						price = comp.getHaPrice();
-					}
-				}
-			}
+			long price = ItemPricing.priceOf(itemId, itemManager);
 
 			CoinFlowSession.TrackedItem trackedItem =
 				new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
@@ -3939,6 +4048,8 @@ public class CoinFlowPlugin extends Plugin
 		lastNotingServiceTick = -100;
 		recentDropIntents.clear();
 		rebaselineGraceTicks = 0;
+		minigameHudVisible = false;
+		minigameHudGraceTicks = 0;
 		lastPlayerLocation = null;
 		lastPlayerActivityTick = -100;
 		if (goldDropOverlay != null)
