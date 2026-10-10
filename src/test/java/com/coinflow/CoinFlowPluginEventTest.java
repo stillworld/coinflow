@@ -131,6 +131,7 @@ public class CoinFlowPluginEventTest
 		when(config.includeAfkTime()).thenReturn(false);
 		when(config.showGoldDrops()).thenReturn(true);
 		when(config.goldDropMinThreshold()).thenReturn(0);
+		when(config.trackUntradeableItems()).thenReturn(true);
 		when(client.getMouseIdleTicks()).thenReturn(1000);
 		when(client.getKeyboardIdleTicks()).thenReturn(1000);
 		// resetSession runs inline when called on the client thread; tests run on one
@@ -1163,6 +1164,237 @@ public class CoinFlowPluginEventTest
 	}
 
 	/**
+	 * Regression for a live bug: unboxing an armour set at the clerk's
+	 * "Sets" interface produced "-1 set, +4 components" — with no handler
+	 * recognising the conversion, the components booked as ~3.6m phantom
+	 * profit (observed: Dharok's armour set). The ITEMSETS interface is the
+	 * only exchange path, so suppression + re-baseline covers both
+	 * directions.
+	 */
+	@Test
+	public void itemsetUnbox_suppressesComponentGains()
+	{
+		int setId = ItemID.SET_BARROWS_DHAROK;
+		stubTrackableItem(setId, "Dharok's armour set", 3_700_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_HEAD, "Dharok's helm", 300_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_BODY, "Dharok's platebody", 780_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_LEGS, "Dharok's platelegs", 810_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_WEAPON, "Dharok's greataxe", 1_700_000L);
+
+		plugin.previousInventorySnapshot = snapshot(setId, 1);
+		plugin.snapshotInitialized = true;
+
+		// Open the clerk's item-sets exchange
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.ITEMSETS);
+		plugin.onWidgetLoaded(open);
+		Assert.assertTrue(plugin.isTrackingSuppressed());
+
+		// Exchange lands while the interface is open: set out, components in
+		ItemContainer unboxed = mockContainer(InventoryID.INV,
+			ItemID.BARROWS_DHAROK_HEAD, 1, ItemID.BARROWS_DHAROK_BODY, 1,
+			ItemID.BARROWS_DHAROK_LEGS, 1, ItemID.BARROWS_DHAROK_WEAPON, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		// Close → re-baseline; trailing packets are absorbed, none book profit
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.ITEMSETS, 0, false));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		Assert.assertEquals("Unboxing a set must not count the components as profit",
+			0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	/**
+	 * The set's GE cost basis must move onto the produced components so a later
+	 * sale realizes the true margin. Selling all four pieces at market should
+	 * net to proceeds minus the original set cost (and GE tax).
+	 */
+	@Test
+	public void itemsetUnbox_transfersBasisToComponents()
+	{
+		int setId = ItemID.SET_BARROWS_DHAROK;
+		stubTrackableItem(setId, "Dharok's armour set", 3_700_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_HEAD, "Dharok's helm", 300_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_BODY, "Dharok's platebody", 780_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_LEGS, "Dharok's platelegs", 810_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_WEAPON, "Dharok's greataxe", 1_700_000L);
+
+		// GE buy fill recorded basis for the set (the 3,764,193 gp from the live log)
+		plugin.grandExchangeTracker.addBasis(setId, 1, 3_764_193L);
+
+		plugin.previousInventorySnapshot = snapshot(setId, 1);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.ITEMSETS);
+		plugin.onWidgetLoaded(open);
+
+		ItemContainer unboxed = mockContainer(InventoryID.INV,
+			ItemID.BARROWS_DHAROK_HEAD, 1, ItemID.BARROWS_DHAROK_BODY, 1,
+			ItemID.BARROWS_DHAROK_LEGS, 1, ItemID.BARROWS_DHAROK_WEAPON, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.ITEMSETS, 0, false));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		// Conversion itself books nothing and the basis moved to the pieces
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(setId));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_HEAD));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_BODY));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_LEGS));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_WEAPON));
+
+		// Selling all four pieces at market: net proceeds 3,518,200 gp
+		// (2% tax each) against 3,764,193 gp basis → total margin -245,993 gp.
+		long netDelta = 0;
+		netDelta += plugin.grandExchangeTracker.settleSell(ItemID.BARROWS_DHAROK_HEAD, 1, 300_000L, plugin.getSession()).netDelta;
+		netDelta += plugin.grandExchangeTracker.settleSell(ItemID.BARROWS_DHAROK_BODY, 1, 780_000L, plugin.getSession()).netDelta;
+		netDelta += plugin.grandExchangeTracker.settleSell(ItemID.BARROWS_DHAROK_LEGS, 1, 810_000L, plugin.getSession()).netDelta;
+		netDelta += plugin.grandExchangeTracker.settleSell(ItemID.BARROWS_DHAROK_WEAPON, 1, 1_700_000L, plugin.getSession()).netDelta;
+		Assert.assertEquals("Component sales must settle against the set's original basis",
+			-245_993L, netDelta);
+	}
+
+	/**
+	 * A conversion packet that lands one tick after the Sets interface closed
+	 * falls into the re-baseline path — the basis transfer must still run.
+	 */
+	@Test
+	public void itemsetUnbox_afterCloseStillTransfersBasis()
+	{
+		int setId = ItemID.SET_BARROWS_DHAROK;
+		stubTrackableItem(setId, "Dharok's armour set", 3_700_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_HEAD, "Dharok's helm", 300_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_BODY, "Dharok's platebody", 780_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_LEGS, "Dharok's platelegs", 810_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_WEAPON, "Dharok's greataxe", 1_700_000L);
+
+		plugin.grandExchangeTracker.addBasis(setId, 1, 3_764_193L);
+
+		plugin.previousInventorySnapshot = snapshot(setId, 1);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.ITEMSETS);
+		plugin.onWidgetLoaded(open);
+
+		// Interface closes before the inventory packet arrives
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.ITEMSETS, 0, false));
+
+		ItemContainer unboxed = mockContainer(InventoryID.INV,
+			ItemID.BARROWS_DHAROK_HEAD, 1, ItemID.BARROWS_DHAROK_BODY, 1,
+			ItemID.BARROWS_DHAROK_LEGS, 1, ItemID.BARROWS_DHAROK_WEAPON, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(setId));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_WEAPON));
+	}
+
+	/**
+	 * Packing is the symmetric case: component basis sums onto the produced set
+	 * so selling the boxed set settles against what the pieces cost.
+	 */
+	@Test
+	public void itemsetPack_transfersBasisToSet()
+	{
+		int setId = ItemID.SET_BARROWS_DHAROK;
+		stubTrackableItem(setId, "Dharok's armour set", 3_700_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_HEAD, "Dharok's helm", 300_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_BODY, "Dharok's platebody", 780_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_LEGS, "Dharok's platelegs", 810_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_WEAPON, "Dharok's greataxe", 1_700_000L);
+
+		// Bought the four pieces on the GE this session for 3,600,000 total
+		plugin.grandExchangeTracker.addBasis(ItemID.BARROWS_DHAROK_HEAD, 1, 290_000L);
+		plugin.grandExchangeTracker.addBasis(ItemID.BARROWS_DHAROK_BODY, 1, 770_000L);
+		plugin.grandExchangeTracker.addBasis(ItemID.BARROWS_DHAROK_LEGS, 1, 800_000L);
+		plugin.grandExchangeTracker.addBasis(ItemID.BARROWS_DHAROK_WEAPON, 1, 1_740_000L);
+
+		plugin.previousInventorySnapshot = snapshot(
+			ItemID.BARROWS_DHAROK_HEAD, 1, ItemID.BARROWS_DHAROK_BODY, 1,
+			ItemID.BARROWS_DHAROK_LEGS, 1, ItemID.BARROWS_DHAROK_WEAPON, 1);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.ITEMSETS);
+		plugin.onWidgetLoaded(open);
+
+		ItemContainer boxed = mockContainer(InventoryID.INV, setId, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, boxed));
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_HEAD));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_BODY));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_LEGS));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_WEAPON));
+		Assert.assertEquals(1, plugin.grandExchangeTracker.basisQuantity(setId));
+
+		// Selling the set at 3,700,000 gross → net 3,626,000 vs 3,600,000 basis
+		// → +26,000 margin.
+		GrandExchangeTracker.GeLedger ledger =
+			plugin.grandExchangeTracker.settleSell(setId, 1, 3_700_000L, plugin.getSession());
+		Assert.assertEquals(26_000L, ledger.netDelta);
+	}
+
+	/**
+	 * The last-closed-itemsets marker is only valid for a few ticks
+	 * (LAST_CLOSED_GROUP_VALID_TICKS = 3). A later re-baseline triggered by
+	 * something else (region/HUD transition) that happens to swallow a
+	 * set↔component-shaped diff must not move basis — the conversion did
+	 * not happen at the clerk.
+	 */
+	@Test
+	public void itemsetStaleClose_doesNotTransferBasis()
+	{
+		int setId = ItemID.SET_BARROWS_DHAROK;
+		stubTrackableItem(setId, "Dharok's armour set", 3_700_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_HEAD, "Dharok's helm", 300_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_BODY, "Dharok's platebody", 780_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_LEGS, "Dharok's platelegs", 810_000L);
+		stubTrackableItem(ItemID.BARROWS_DHAROK_WEAPON, "Dharok's greataxe", 1_700_000L);
+
+		plugin.grandExchangeTracker.addBasis(setId, 1, 3_764_193L);
+
+		plugin.previousInventorySnapshot = snapshot(setId, 1);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.ITEMSETS);
+		plugin.onWidgetLoaded(open);
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.ITEMSETS, 0, false));
+
+		// The close marker and the post-close grace window both age out.
+		for (int i = 0; i < 4; i++)
+		{
+			plugin.onGameTick(new GameTick());
+		}
+
+		// A fresh re-baseline (e.g. region/HUD transition) — the inventory
+		// still holds the set, so this set→components diff is swallowed by
+		// the baseline, not a real exchange conversion.
+		plugin.setNeedsRebaseline(true);
+		ItemContainer unboxed = mockContainer(InventoryID.INV,
+			ItemID.BARROWS_DHAROK_HEAD, 1, ItemID.BARROWS_DHAROK_BODY, 1,
+			ItemID.BARROWS_DHAROK_LEGS, 1, ItemID.BARROWS_DHAROK_WEAPON, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals("Stale close marker must not move the set's basis",
+			1, plugin.grandExchangeTracker.basisQuantity(setId));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_HEAD));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_BODY));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_LEGS));
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(ItemID.BARROWS_DHAROK_WEAPON));
+	}
+
+	/**
 	 * Regression test for live bug: withdrawing an untradeable item (e.g. Bow string spool,
 	 * HA = 1,200 gp, GE = 0 gp) where the inventory update packet arrives immediately after
 	 * the bank widget closes. It must be absorbed without registering profit.
@@ -2096,6 +2328,203 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(50_000L, plugin.getSession().getTotalProfit());
 		Assert.assertEquals(1L, plugin.getSession().getTrackedItems().get(coinsId).getPriceEach());
 		Assert.assertEquals(50_000, plugin.getSession().getTrackedItems().get(coinsId).getQuantity());
+	}
+
+	/**
+	 * Regression test for live bug: blessed bone shards are untradeable and
+	 * cannot be alchemised, so their nominal 10 gp HA price is unrealizable.
+	 * Mining them at the calcified rocks must be invisible to tracking — no
+	 * profit, no item row.
+	 */
+	@Test
+	public void blessedBoneShards_untradeableUnalchable_invisibleToTracking()
+	{
+		int shardId = ItemID.BLESSED_BONE_SHARD;
+		stubUntradeableItemWithHa(shardId, "Blessed bone shards", 10L);
+
+		// Baseline empty
+		ItemContainerChanged baseline = new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV));
+		plugin.onItemContainerChanged(baseline);
+
+		// Mine a stack of shards
+		ItemContainerChanged gainEvent = new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, shardId, 72)
+		);
+		plugin.onItemContainerChanged(gainEvent);
+
+		Assert.assertEquals("Unalchable untradeable items must not register profit",
+			0L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse("Valueless items must not be tracked at all",
+			plugin.getSession().getTrackedItems().containsKey(shardId));
+	}
+
+	/**
+	 * Track Untradeable Items off: an alchable untradeable (HA price is
+	 * realizable but not yet cash) must be invisible to tracking — no profit,
+	 * no item row. The value still surfaces later if the item is alched, as
+	 * plain coin income.
+	 */
+	@Test
+	public void untradeableTrackingDisabled_alchableUntradeable_invisibleToTracking()
+	{
+		when(config.trackUntradeableItems()).thenReturn(false);
+
+		int itemId = 999_001;
+		when(itemManager.canonicalize(itemId)).thenReturn(itemId);
+		when(itemManager.getItemPrice(itemId)).thenReturn(0L);
+		ItemComposition comp = org.mockito.Mockito.mock(ItemComposition.class);
+		when(comp.getName()).thenReturn("Untradeable trinket");
+		when(comp.getHaPrice()).thenReturn(500);
+		when(comp.isTradeable()).thenReturn(false);
+		when(itemManager.getItemComposition(itemId)).thenReturn(comp);
+
+		ItemContainerChanged baseline = new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV));
+		plugin.onItemContainerChanged(baseline);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, itemId, 3)
+		));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+		Assert.assertFalse(plugin.getSession().getTrackedItems().containsKey(itemId));
+	}
+
+	/**
+	 * Track Untradeable Items on (default): an alchable untradeable keeps the
+	 * HA fallback — its value is realizable cash.
+	 */
+	@Test
+	public void untradeableTrackingEnabled_alchableUntradeable_trackedAtHa()
+	{
+		int itemId = 999_002;
+		when(itemManager.canonicalize(itemId)).thenReturn(itemId);
+		when(itemManager.getItemPrice(itemId)).thenReturn(0L);
+		ItemComposition comp = org.mockito.Mockito.mock(ItemComposition.class);
+		when(comp.getName()).thenReturn("Untradeable trinket");
+		when(comp.getHaPrice()).thenReturn(500);
+		when(comp.isTradeable()).thenReturn(false);
+		when(itemManager.getItemComposition(itemId)).thenReturn(comp);
+
+		ItemContainerChanged baseline = new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV));
+		plugin.onItemContainerChanged(baseline);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV,
+			mockContainer(InventoryID.INV, itemId, 3)
+		));
+
+		Assert.assertEquals(1_500L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(500L, plugin.getSession().getTrackedItems().get(itemId).getPriceEach());
+	}
+
+	/**
+	 * Toggling Track Untradeable Items mid-session is not retroactive: items
+	 * gained while it was off stay untracked; items gained after switching it
+	 * on track at HA from that point forward.
+	 */
+	@Test
+	public void untradeableToggle_offToOn_onlyLaterGainsTracked()
+	{
+		when(config.trackUntradeableItems()).thenReturn(false);
+
+		int itemId = 999_003;
+		stubUntradeableItemWithHa(itemId, "Untradeable trinket", 500L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 1)));
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+
+		// Switch on mid-session: the earlier +1 stays invisible; only the
+		// new +2 diff books at HA.
+		when(config.trackUntradeableItems()).thenReturn(true);
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 3)));
+
+		Assert.assertEquals(1_000L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(2, plugin.getSession().getTrackedItems().get(itemId).getQuantity());
+	}
+
+	/**
+	 * Accepted asymmetry of the toggle: a gain booked while Track Untradeable
+	 * Items was on stays booked even when the matching loss lands while off —
+	 * the loss is stripped, leaving the +HA in profit.
+	 */
+	@Test
+	public void untradeableToggle_onToOff_bookedGainPersistsLossInvisible()
+	{
+		int itemId = 999_004;
+		stubUntradeableItemWithHa(itemId, "Untradeable trinket", 500L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 1)));
+
+		Assert.assertEquals(500L, plugin.getSession().getTotalProfit());
+
+		when(config.trackUntradeableItems()).thenReturn(false);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(500L, plugin.getSession().getTotalProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+	}
+
+	/**
+	 * Cash-basis payoff for Track Untradeable Items off: alching an
+	 * untradeable surfaces its value as plain coin income minus the nature
+	 * rune — the stripped item loss never reaches HighAlchemyHandler, so no
+	 * item expense offsets the coins.
+	 */
+	@Test
+	public void untradeableTrackingDisabled_alch_booksCoinsAsIncome()
+	{
+		when(config.trackUntradeableItems()).thenReturn(false);
+
+		int itemId = 999_005;
+		int natureRuneId = net.runelite.api.gameval.ItemID.NATURERUNE;
+		int coinsId = net.runelite.api.gameval.ItemID.COINS;
+		stubUntradeableItemWithHa(itemId, "Untradeable trinket", 500L);
+		stubTrackableItem(natureRuneId, "Nature rune", 90L);
+		when(itemManager.canonicalize(coinsId)).thenReturn(coinsId);
+
+		// Baseline: 3 trinkets (invisible), 10 nature runes
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 3, natureRuneId, 10)));
+
+		// Alch one: +500 coins, -1 trinket (stripped), -1 nature rune
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 2, natureRuneId, 9, coinsId, 500)));
+
+		Assert.assertEquals(500L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(90L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(410L, plugin.getSession().getTotalProfit());
+	}
+
+	/**
+	 * The strip must be surgical: an untradeable arriving in the same diff as
+	 * ordinary loot removes only the untradeable — the tradeable gain still
+	 * books normally.
+	 */
+	@Test
+	public void untradeableTrackingDisabled_mixedDiff_stripsOnlyUntradeable()
+	{
+		when(config.trackUntradeableItems()).thenReturn(false);
+
+		int itemId = 999_006;
+		int sharkId = ItemID.SHARK;
+		stubUntradeableItemWithHa(itemId, "Untradeable trinket", 500L);
+		stubTrackableItem(sharkId, "Shark", 800L, "Eat");
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, mockContainer(InventoryID.INV)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, itemId, 2, sharkId, 3)));
+
+		Assert.assertEquals(2_400L, plugin.getSession().getTotalProfit());
+		Assert.assertTrue(plugin.getSession().getTrackedItems().containsKey(sharkId));
+		Assert.assertFalse(plugin.getSession().getTrackedItems().containsKey(itemId));
 	}
 
 	private void stubAlchableItem(int itemId, String name, long gePrice, int haPrice, String... actions)

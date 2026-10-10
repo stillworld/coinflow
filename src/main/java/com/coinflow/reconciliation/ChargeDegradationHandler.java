@@ -25,6 +25,15 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	// Matches Barrows degrade stages: "Dharok's helm 100" -> 75 -> 50 -> 25 -> 0
 	private static final Pattern BARROWS_PATTERN = Pattern.compile("^(.*?)\\s+(100|75|50|25|0)$");
 
+	// Matches imbued variants: "Seers ring (i)", "Slayer helmet (i)",
+	// "Salve amulet(ei)", "Ring of suffering (ri)". All are untradeable.
+	private static final Pattern IMBUED_PATTERN = Pattern.compile("^(.*?)\\s*\\((i|ei|ri)\\)$", Pattern.CASE_INSENSITIVE);
+
+	// Suffixes stripped when base-name matching against an imbued side —
+	// includes "(e)"/"(r)", the un-imbued enchanted/recoil variants that
+	// imbue into (ei)/(ri): "Salve amulet(e)" -> "(ei)", "Ring of suffering (r)" -> "(ri)".
+	private static final Pattern IMBUE_BASE_PATTERN = Pattern.compile("^(.*?)\\s*\\((i|ei|ri|e|r)\\)$", Pattern.CASE_INSENSITIVE);
+
 	private static final class ChargeInfo
 	{
 		final String baseName;
@@ -143,9 +152,10 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 			}
 		}
 
-		// Suppress any lingering partially degraded items or lit light sources in rawGains (e.g. Slayer ring (2))
-		// Partially degraded items cannot be obtained as drops or loot and indicate owned items
-		// degrading across split ticks, teleport scene transitions, or unequipped after use.
+		// Suppress any lingering partially degraded items, lit light sources, or imbued
+		// variants in rawGains (e.g. Slayer ring (2), Seers ring (i)). None of these can
+		// be obtained as drops or loot; they indicate owned items converting across
+		// split ticks, teleport scene transitions, or unequipped after use.
 		if (!rawGains.isEmpty())
 		{
 			List<Integer> gainedKeys = new ArrayList<>(rawGains.keySet());
@@ -153,10 +163,11 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 			{
 				int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 				String gainedName = context.getItemName(canonicalGainedId);
-				if (isPartiallyDegraded(gainedName) || isLitLightSource(canonicalGainedId, gainedName))
+				if (isPartiallyDegraded(gainedName) || isLitLightSource(canonicalGainedId, gainedName)
+					|| isImbuedVariant(gainedName))
 				{
 					rawGains.remove(gainedId);
-					log.debug("Suppressed partially degraded or lit item from profit gains: {}", gainedName);
+					log.debug("Suppressed partially degraded, lit, or imbued item from profit gains: {}", gainedName);
 				}
 			}
 		}
@@ -214,6 +225,18 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				&& (lostStaged && gainedStaged || isBarrowsBrotherItem(lostBase));
 		}
 
+		// 4. Imbue conversions: the same base item gaining or swapping the
+		//    imbued suffix (Seers ring -> Seers ring (i), Salve amulet(i) ->
+		//    Salve amulet(ei), Ring of suffering (r) -> Ring of suffering (ri))
+		//    via NMZ, Soul Wars, or Emir's Arena rewards. Imbued items are
+		//    untradeable and never drops, so pairing is safe. The un-imbued
+		//    side may itself carry an "(e)"/"(r)" suffix, so both sides are
+		//    reduced to their shared base before comparing.
+		if (imbuedBaseName(lostName) != null || imbuedBaseName(gainedName) != null)
+		{
+			return stripImbueSuffix(lostName).equalsIgnoreCase(stripImbueSuffix(gainedName));
+		}
+
 		return false;
 	}
 
@@ -251,6 +274,34 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				&& barrowsGained.group(2).equals(nextBarrowsStage(barrowsLost.group(2)));
 		}
 		return false;
+	}
+
+	private static String imbuedBaseName(String itemName)
+	{
+		Matcher m = IMBUED_PATTERN.matcher(itemName);
+		return m.matches() ? m.group(1).trim() : null;
+	}
+
+	/**
+	 * The item's base name with any charge-family suffix removed — the imbued
+	 * forms (i)/(ei)/(ri) plus the un-imbued (e)/(r) variants that imbue into
+	 * them — so an un-imbued-but-suffixed side still matches its imbued twin.
+	 */
+	private static String stripImbueSuffix(String itemName)
+	{
+		Matcher m = IMBUE_BASE_PATTERN.matcher(itemName);
+		return m.matches() ? m.group(1).trim() : itemName.trim();
+	}
+
+	/**
+	 * Checks if an item is an imbued variant (Seers ring (i), Slayer helmet (i),
+	 * Salve amulet(ei), Ring of suffering (ri)). Imbued items are untradeable
+	 * and never obtained as drops or loot, so an unmatched gain is always a
+	 * conversion artifact.
+	 */
+	static boolean isImbuedVariant(String itemName)
+	{
+		return itemName != null && IMBUED_PATTERN.matcher(itemName).matches();
 	}
 
 	private static String nextBarrowsStage(String stage)

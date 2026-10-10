@@ -2,6 +2,7 @@ package com.coinflow;
 
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
@@ -11,8 +12,10 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import java.time.Duration;
+import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.components.ComponentConstants;
 import net.runelite.client.ui.overlay.components.LineComponent;
+import net.runelite.client.ui.overlay.components.TitleComponent;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -307,5 +310,79 @@ public class CoinFlowOverlayTest
 		Dimension result = overlay.render(graphics);
 		Assert.assertNotNull(result);
 		Assert.assertEquals(4, overlay.getPanelComponent().getChildren().size());
+	}
+
+	@Test
+	public void render_compact_hidesTitle()
+	{
+		when(config.compactMode()).thenReturn(true);
+		when(config.trackSpent()).thenReturn(false);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		overlay.setClearChildren(false);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		// Compact drops the title row: 3 children (Profit, GP/Hour, Time) instead of 4
+		Assert.assertEquals(3, overlay.getPanelComponent().getChildren().size());
+		for (Object child : overlay.getPanelComponent().getChildren())
+		{
+			Assert.assertFalse(child instanceof TitleComponent);
+		}
+	}
+
+	@Test
+	public void render_compact_smallerThanStandard()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew();
+		when(plugin.getSession()).thenReturn(session);
+		when(config.trackSpent()).thenReturn(false);
+
+		// PanelComponent reports the size measured on the previous pass, so render
+		// twice per mode before comparing.
+		overlay.render(graphics);
+		Dimension standard = overlay.render(graphics);
+		Assert.assertNotNull(standard);
+
+		when(config.compactMode()).thenReturn(true);
+		overlay.render(graphics);
+		Dimension compact = overlay.render(graphics);
+		Assert.assertNotNull(compact);
+
+		Assert.assertTrue("Compact overlay must be narrower", compact.width < standard.width);
+		Assert.assertTrue("Compact overlay must be shorter", compact.height < standard.height);
+	}
+
+	@Test
+	public void render_compact_restoresGraphicsFont()
+	{
+		Font defaultFont = graphics.getFont();
+		when(config.compactMode()).thenReturn(true);
+		when(plugin.getSession()).thenReturn(CoinFlowSession.createNew());
+
+		overlay.render(graphics);
+		Assert.assertEquals("render() must restore the graphics font", defaultFont, graphics.getFont());
+	}
+
+	@Test
+	public void render_compact_singleLine_stillOneChildAndNarrower()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);
+		when(config.compactMode()).thenReturn(true);
+		CoinFlowSession session = CoinFlowSession.createNew();
+		when(plugin.getSession()).thenReturn(session);
+
+		overlay.render(graphics);
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+
+		overlay.setClearChildren(false);
+		overlay.render(graphics);
+		Assert.assertEquals(1, overlay.getPanelComponent().getChildren().size());
+		Assert.assertTrue(overlay.getPanelComponent().getChildren().get(0) instanceof LineComponent);
+
+		String expectedText = CoinFlowOverlay.formatCompactGpPerHour(session.getGpPerHour(false));
+		Assert.assertEquals("Compact single-line width uses compact padding and the small font",
+			graphics.getFontMetrics(FontManager.getRunescapeSmallFont()).stringWidth(expectedText) + 8, result.width);
 	}
 }
