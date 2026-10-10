@@ -214,7 +214,7 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	/**
-	 * Latched visibility of any {@link MinigameQuarantine#MINIGAME_HUD_INTERFACES}
+	 * Latched visibility of any {@link MinigameQuarantine#MINIGAME_HUD_COMPONENTS}
 	 * HUD. Latched in {@link #updateSuppressedRegion()} (runs on every container
 	 * event and game tick) so the transition can schedule a re-baseline and an
 	 * exit grace window just like {@link InterfaceTracker#SUPPRESSED_REGIONS}.
@@ -334,9 +334,9 @@ public class CoinFlowPlugin extends Plugin
 	private void updateMinigameHudSuppression()
 	{
 		boolean visible = false;
-		for (int groupId : MinigameQuarantine.MINIGAME_HUD_INTERFACES)
+		for (int componentId : MinigameQuarantine.MINIGAME_HUD_COMPONENTS)
 		{
-			Widget hud = client.getWidget(groupId, 0);
+			Widget hud = client.getWidget(componentId);
 			if (hud != null && !hud.isHidden())
 			{
 				visible = true;

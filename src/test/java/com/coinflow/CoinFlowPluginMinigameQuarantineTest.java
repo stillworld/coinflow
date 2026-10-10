@@ -157,12 +157,12 @@ public class CoinFlowPluginMinigameQuarantineTest
 
 		// Lobby: suppression via the lobby HUD, not the shared region halo.
 		Widget lobbyHud = hudWidget(false);
-		when(client.getWidget(InterfaceID.BR_LOBBYOVERLAY, 0)).thenReturn(lobbyHud);
+		when(client.getWidget(InterfaceID.BrLobbyoverlay.UNIVERSE)).thenReturn(lobbyHud);
 		fireInv(ItemID.COINS, 50_000);
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
 		// Match island: suppression via the verified region set.
-		when(client.getWidget(InterfaceID.BR_LOBBYOVERLAY, 0)).thenReturn(null);
+		when(client.getWidget(InterfaceID.BrLobbyoverlay.UNIVERSE)).thenReturn(null);
 		when(worldView.getMapRegions()).thenReturn(LMS_MATCH_REGIONS);
 		fireInv(ItemID.COINS, 50_000, WHIP, 1); // loadout grant
 		Assert.assertTrue(plugin.isTrackingSuppressed());
@@ -305,7 +305,7 @@ public class CoinFlowPluginMinigameQuarantineTest
 		fireInv(ItemID.COINS, 50_000);
 
 		Widget hud = hudWidget(false);
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(hud);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(hud);
 		fireInv(ItemID.COINS, 50_000); // latch the HUD state
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
@@ -322,12 +322,12 @@ public class CoinFlowPluginMinigameQuarantineTest
 	{
 		fireInv(ItemID.COINS, 50_000);
 		Widget hud = hudWidget(false);
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(hud);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(hud);
 		fireInv(ItemID.COINS, 50_000, SHARK, 2); // granted while suppressed
 		Assert.assertEquals(0L, plugin.session.getTotalProfit());
 
 		// HUD gone; the strip lands over the next events during grace.
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(null);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(null);
 		fireInv(ItemID.COINS, 50_000, SHARK, 1);
 		fireInv(ItemID.COINS, 50_000);
 		Assert.assertTrue(plugin.isTrackingSuppressed()); // still in grace
@@ -354,11 +354,11 @@ public class CoinFlowPluginMinigameQuarantineTest
 	public void hudCloseGrace_agesOutWhileUninitialized()
 	{
 		Widget hud = hudWidget(false);
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(hud);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(hud);
 		plugin.onGameTick(new GameTick()); // latch visible — runs before the snapshot guard
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(null);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(null);
 		plugin.onGameTick(new GameTick()); // latch closed -> grace starts
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
@@ -379,7 +379,7 @@ public class CoinFlowPluginMinigameQuarantineTest
 	{
 		fireInv(ItemID.COINS, 50_000);
 		Widget hud = hudWidget(false);
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(hud);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(hud);
 		fireInv(ItemID.COINS, 50_000, WHIP, 1);
 
 		Player player = mock(Player.class);
@@ -398,11 +398,11 @@ public class CoinFlowPluginMinigameQuarantineTest
 	{
 		fireInv(ItemID.COINS, 50_000);
 		Widget hud = hudWidget(false);
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(hud);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(hud);
 		fireInv(ItemID.COINS, 50_000, WHIP, 1); // latch visible
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
-		when(client.getWidget(InterfaceID.TEMPOROSS_HUD, 0)).thenReturn(null);
+		when(client.getWidget(InterfaceID.TemporossHud.UNIVERSE)).thenReturn(null);
 		fireInv(ItemID.COINS, 50_000, WHIP, 1); // latch closed -> grace starts
 		Assert.assertTrue("Exit grace must still be suppressing", plugin.isTrackingSuppressed());
 

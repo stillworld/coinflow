@@ -19,7 +19,7 @@ import net.runelite.api.gameval.ItemID;
  *   both the grant and the exit strip disappear. Persistent reward items
  *   (fighter torso, Castle Wars tickets/decorative armour, Soul Wars spoils,
  *   guardian essence) are deliberately excluded.</li>
- *   <li>{@link #MINIGAME_HUD_INTERFACES} — interface groups whose HUD is only
+ *   <li>{@link #MINIGAME_HUD_COMPONENTS} — interface components whose HUD is only
  *   visible while inside a minigame that sits on the normal overworld map
  *   (where region suppression's ~2-region load halo would blind nearby
  *   players' tracking). Evaluated by live widget visibility at diff time,
@@ -170,30 +170,32 @@ public final class MinigameQuarantine
 		ItemID.HOSIDIUS_TITHE_FERTILISER // TODO verify — may persist outside
 	)));
 
-	// ── Minigame HUD interface groups ──────────────────────────────────
-	// While one of these is visible the player is inside an overworld-area
-	// minigame where region suppression would bleed onto neighbours.
+	// ── Minigame HUD interface components ──────────────────────────────
+	// Packed component ids (each interface's UNIVERSE/UNIVERSAL child) so
+	// lookups use the single-arg component-based getWidget. While one of
+	// these is visible the player is inside an overworld-area minigame
+	// where region suppression would bleed onto neighbours.
 	// TODO verify each group only shows while actually inside the minigame
 	// (watch for "Interface opened" debug lines appearing at login — that
 	// would mean the group is persistently loaded and cannot be trusted even
 	// with the visibility check, since isHidden() may report stale state).
-	static final Set<Integer> MINIGAME_HUD_INTERFACES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+	static final Set<Integer> MINIGAME_HUD_COMPONENTS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
 		// Tempoross — tools are real item ids, so only a HUD/region signal
 		// can quarantine them; the cove shares map space with Unkah's docks.
-		InterfaceID.TEMPOROSS_HUD,
-		InterfaceID.TEMPOROSS_LOBBY_HUD,
+		InterfaceID.TemporossHud.UNIVERSE,
+		InterfaceID.TemporossLobbyHud.UNIVERSE,
 		// The Gauntlet — belt-and-suspenders alongside the region entry; the
 		// HUD is what actually quarantines if the seeded region id is wrong.
-		InterfaceID.GAUNTLET_OVERLAY,
-		InterfaceID.GAUNTLET_MAP,
+		InterfaceID.GauntletOverlay.UNIVERSE,
+		InterfaceID.GauntletMap.UNIVERSE,
 		// Last Man Standing — BR_LOBBYOVERLAY is the lobby panel, BR_OVERLAY
 		// the in-match HUD. Verified in game: the lobby HUD latches on every
 		// lobby login and suppression persists through the whole match. This
 		// is the primary LMS coverage — the lobby's region halo shares real
 		// Ferox Enclave chunks, and matches rotate between several arena
 		// maps, so neither end can be fully covered by region ids.
-		InterfaceID.BR_LOBBYOVERLAY,
-		InterfaceID.BR_OVERLAY
+		InterfaceID.BrLobbyoverlay.UNIVERSE,
+		InterfaceID.BrOverlay.UNIVERSAL
 		// Candidates pending in-game capture: SOUL_WARS_GAME (375),
 		// BARBASSAULT_OVER_* (485-488), CASTLEWARS_STATUS_OVERLAY_* (58/59).
 		// Those minigames are already covered by the item denylist, so HUD

@@ -100,7 +100,7 @@ public class InterfaceTracker
 	// (e.g. Tithe Farm's region 7222 covers the Hosidius vinery — it is
 	// deliberately NOT here; its provided items are quarantined via
 	// MinigameQuarantine instead). Minigames on the overworld map that need
-	// quarantine use MinigameQuarantine.MINIGAME_HUD_INTERFACES.
+	// quarantine use MinigameQuarantine.MINIGAME_HUD_COMPONENTS.
 	//
 	// The PvP tutorial arena (Pete Kayer, entered from Ferox Enclave) issues
 	// loaner gear and supplies on entry and strips them on exit — none of it
