@@ -186,15 +186,14 @@ public final class MinigameQuarantine
 		// HUD is what actually quarantines if the seeded region id is wrong.
 		InterfaceID.GAUNTLET_OVERLAY,
 		InterfaceID.GAUNTLET_MAP,
-		// Last Man Standing — legacy WidgetID groups (gameval has no LMS
-		// constants). LMS_GROUP_ID is the lobby panel, LMS_INGAME_GROUP_ID
+		// Last Man Standing — BR_LOBBYOVERLAY is the lobby panel, BR_OVERLAY
 		// the in-match HUD. Verified in game: the lobby HUD latches on every
 		// lobby login and suppression persists through the whole match. This
 		// is the primary LMS coverage — the lobby's region halo shares real
 		// Ferox Enclave chunks, and matches rotate between several arena
 		// maps, so neither end can be fully covered by region ids.
-		net.runelite.api.widgets.WidgetID.LMS_GROUP_ID,
-		net.runelite.api.widgets.WidgetID.LMS_INGAME_GROUP_ID
+		InterfaceID.BR_LOBBYOVERLAY,
+		InterfaceID.BR_OVERLAY
 		// Candidates pending in-game capture: SOUL_WARS_GAME (375),
 		// BARBASSAULT_OVER_* (485-488), CASTLEWARS_STATUS_OVERLAY_* (58/59).
 		// Those minigames are already covered by the item denylist, so HUD

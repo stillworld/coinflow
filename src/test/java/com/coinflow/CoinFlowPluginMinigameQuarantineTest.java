@@ -14,7 +14,6 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.widgets.Widget;
-import net.runelite.api.widgets.WidgetID;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -158,12 +157,12 @@ public class CoinFlowPluginMinigameQuarantineTest
 
 		// Lobby: suppression via the lobby HUD, not the shared region halo.
 		Widget lobbyHud = hudWidget(false);
-		when(client.getWidget(WidgetID.LMS_GROUP_ID, 0)).thenReturn(lobbyHud);
+		when(client.getWidget(InterfaceID.BR_LOBBYOVERLAY, 0)).thenReturn(lobbyHud);
 		fireInv(ItemID.COINS, 50_000);
 		Assert.assertTrue(plugin.isTrackingSuppressed());
 
 		// Match island: suppression via the verified region set.
-		when(client.getWidget(WidgetID.LMS_GROUP_ID, 0)).thenReturn(null);
+		when(client.getWidget(InterfaceID.BR_LOBBYOVERLAY, 0)).thenReturn(null);
 		when(worldView.getMapRegions()).thenReturn(LMS_MATCH_REGIONS);
 		fireInv(ItemID.COINS, 50_000, WHIP, 1); // loadout grant
 		Assert.assertTrue(plugin.isTrackingSuppressed());
