@@ -68,8 +68,25 @@ final class ShopTracker
 				int itemId = entry.getKey();
 				int quantity = nonCoinGains.get(itemId);
 				long cost = entry.getValue();
-				tradeTracker.addBasis(itemId, quantity, cost);
-				log.debug("Shop buy: item {} x{} for {} gp", itemId, quantity, cost);
+				if (canRealizeValue(itemId, itemManager))
+				{
+					tradeTracker.addBasis(itemId, quantity, cost);
+					log.debug("Shop buy: item {} x{} for {} gp", itemId, quantity, cost);
+				}
+				else if (cost > 0)
+				{
+					// Untradeable: the cash can never be recovered (no sell-back,
+					// no GE, unalchable in practice), so the purchase is spend,
+					// not an asset conversion.
+					ItemComposition comp = itemManager != null ? itemManager.getItemComposition(itemId) : null;
+					String name = comp != null && comp.getName() != null ? comp.getName() : "Item " + itemId;
+					CoinFlowSession.TrackedItem expense = cost % quantity == 0
+						? new CoinFlowSession.TrackedItem(itemId, name, quantity, cost / quantity)
+						: new CoinFlowSession.TrackedItem(itemId, name, cost, 1L);
+					ledger.expenses.merge(itemId, expense, (a, b) -> a.merge(b));
+					ledger.netDelta -= cost;
+					log.debug("Shop purchase of unrealizable item expensed: {} x{} for {} gp", name, quantity, cost);
+				}
 			}
 		}
 
@@ -123,6 +140,18 @@ final class ShopTracker
 			result.merge(itemId, qty, Integer::sum);
 		}
 		return result;
+	}
+
+	/**
+	 * Whether the item can ever be converted back to cash — only tradeable
+	 * items qualify. Untradeable items carry a nominal HA price even when they
+	 * cannot be alchemised, so they cannot be distinguished reliably; when the
+	 * composition is unknown, keep the basis behavior.
+	 */
+	private static boolean canRealizeValue(int itemId, ItemManager itemManager)
+	{
+		ItemComposition comp = itemManager != null ? itemManager.getItemComposition(itemId) : null;
+		return comp == null || comp.isTradeable();
 	}
 
 	private static boolean isIgnored(int itemId, ItemManager itemManager, Set<String> ignoredItemNames)
