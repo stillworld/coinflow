@@ -90,6 +90,56 @@ public class WeaponChargeTrackerTest
 	}
 
 	@Test
+	public void scytheAttack_recordsBloodRunesAndFractionalVial()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+
+		for (int i = 0; i < 100; i++)
+		{
+			tracker.onAttackAnimation(AnimationID.SCYTHE_OF_VITUR_ATTACK, "Scythe of vitur", i);
+		}
+
+		Map<Integer, Integer> spent = tracker.drain();
+		Assert.assertEquals(200, spent.get(ItemID.BLOODRUNE).intValue());
+		Assert.assertEquals(1, spent.get(ItemID.VIAL_BLOOD).intValue());
+	}
+
+	@Test
+	public void scytheAnimationWithUnrelatedWeapon_recordsNothing()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+
+		tracker.onAttackAnimation(AnimationID.SCYTHE_OF_VITUR_ATTACK, "Dragon scimitar", 1);
+
+		Assert.assertTrue(tracker.drain().isEmpty());
+	}
+
+	@Test
+	public void chainmaceAttack_recordsEtherViaChainmaceAnimation()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+
+		tracker.onAttackAnimation(AnimationID.WILD_CAVE_CHAINMACE_CRUSH, "Viggora's chainmace", 1);
+		tracker.onAttackAnimation(AnimationID.WILD_CAVE_CHAINMACE_STAB, "Ursine chainmace", 2);
+
+		Map<Integer, Integer> spent = tracker.drain();
+		Assert.assertEquals(2, spent.get(ItemID.WILD_CAVE_SHARD).intValue());
+	}
+
+	@Test
+	public void chainmaceVarbitDelta_matchingAttack_isNotDoubleCounted()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+		seed(tracker, VarbitID.CHARGES_WILDERNESS_WEAPON_QUANTITY, 100);
+
+		tracker.onAttackAnimation(AnimationID.WILD_CAVE_CHAINMACE_CRUSH, "Ursine chainmace", 5);
+		tracker.onVarbitChanged(VarbitID.CHARGES_WILDERNESS_WEAPON_QUANTITY, 99, true, 6);
+
+		Map<Integer, Integer> spent = tracker.drain();
+		Assert.assertEquals(1, spent.get(ItemID.WILD_CAVE_SHARD).intValue());
+	}
+
+	@Test
 	public void bowAnimationWithUnrelatedWeapon_recordsNothing()
 	{
 		WeaponChargeTracker tracker = new WeaponChargeTracker();

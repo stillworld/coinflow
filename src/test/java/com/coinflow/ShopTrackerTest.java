@@ -3,6 +3,7 @@ package com.coinflow;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import net.runelite.api.ItemComposition;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 import org.junit.Assert;
@@ -27,6 +28,7 @@ public class ShopTrackerTest
 	private static final int SHARK = 385;
 	private static final int HELM = 11497;
 	private static final int NOTED_SHARK = 386;
+	private static final int BOOK = 9003;
 
 	private GrandExchangeTracker tradeTracker;
 	private ShopTracker shopTracker;
@@ -98,6 +100,72 @@ public class ShopTrackerTest
 
 		Assert.assertTrue(ledger.isEmpty());
 		Assert.assertEquals(0, tradeTracker.basisQuantity(SHARK));
+	}
+
+	@Test
+	public void buy_untradeableItem_expensesInsteadOfBasis()
+	{
+		ItemComposition bookComp = mock(ItemComposition.class);
+		when(bookComp.isTradeable()).thenReturn(false);
+		when(bookComp.getName()).thenReturn("Security book");
+		when(itemManager.getItemComposition(BOOK)).thenReturn(bookComp);
+
+		GrandExchangeTracker.GeLedger ledger = reconcile(
+			map(BOOK, 1), map(ItemID.COINS, 2));
+
+		Assert.assertEquals(0, tradeTracker.basisQuantity(BOOK));
+		Assert.assertEquals(2, ledger.expenses.get(BOOK).getTotalValue());
+		Assert.assertEquals(-2L, ledger.netDelta);
+	}
+
+	@Test
+	public void buy_mixedBasket_onlyUntradeableExpensed()
+	{
+		ItemComposition bookComp = mock(ItemComposition.class);
+		when(bookComp.isTradeable()).thenReturn(false);
+		when(bookComp.getName()).thenReturn("Security book");
+		when(itemManager.getItemComposition(BOOK)).thenReturn(bookComp);
+		ItemComposition sharkComp = mock(ItemComposition.class);
+		when(sharkComp.isTradeable()).thenReturn(true);
+		when(itemManager.getItemComposition(SHARK)).thenReturn(sharkComp);
+
+		GrandExchangeTracker.GeLedger ledger = reconcile(
+			map(SHARK, 10, BOOK, 1), map(ItemID.COINS, 1100));
+
+		// Weighted split (prices unstubbed -> weight = qty): shark 1000, book 100
+		Assert.assertEquals(10, tradeTracker.basisQuantity(SHARK));
+		Assert.assertEquals(0, tradeTracker.basisQuantity(BOOK));
+		Assert.assertEquals(100, ledger.expenses.get(BOOK).getTotalValue());
+		Assert.assertEquals(-100L, ledger.netDelta);
+	}
+
+	@Test
+	public void buy_nullComposition_keepsBasis()
+	{
+		GrandExchangeTracker.GeLedger ledger = reconcile(
+			map(BOOK, 1), map(ItemID.COINS, 2));
+
+		Assert.assertTrue(ledger.isEmpty());
+		Assert.assertEquals(1, tradeTracker.basisQuantity(BOOK));
+	}
+
+	@Test
+	public void buy_zeroCostShare_noExpenseRow()
+	{
+		ItemComposition bookComp = mock(ItemComposition.class);
+		when(bookComp.isTradeable()).thenReturn(false);
+		when(itemManager.getItemComposition(BOOK)).thenReturn(bookComp);
+		when(itemManager.getItemPrice(SHARK)).thenReturn(10000L);
+		ItemComposition sharkComp = mock(ItemComposition.class);
+		when(sharkComp.isTradeable()).thenReturn(true);
+		when(itemManager.getItemComposition(SHARK)).thenReturn(sharkComp);
+
+		GrandExchangeTracker.GeLedger ledger = reconcile(
+			map(SHARK, 10, BOOK, 1), map(ItemID.COINS, 100));
+
+		// Book's pro-rata share rounds to 0: no expense row, no basis lot
+		Assert.assertNull(ledger.expenses.get(BOOK));
+		Assert.assertEquals(0, tradeTracker.basisQuantity(BOOK));
 	}
 
 	// ── Sells ───────────────────────────────────────────────────────────

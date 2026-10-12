@@ -581,6 +581,17 @@ public final class ConsumableRegistry
 			}
 		}
 
+		if (activeSkills.contains(Skill.HERBLORE))
+		{
+			// Herbs fed into the Mastering Mixology refiner (or otherwise
+			// consumed for XP) leave only an untradeable paste behind, which
+			// stripNonEconomicItems removes — so the loss arrives one-sided.
+			if (isHerbName(lower))
+			{
+				return true;
+			}
+		}
+
 		if (activeSkills.contains(Skill.HUNTER))
 		{
 			if (isLog(lower) || isSeed(itemName)
@@ -611,5 +622,21 @@ public final class ConsumableRegistry
 			|| lower.endsWith(" log")
 			|| lower.contains("pyre logs")
 			|| lower.equals("kindling");
+	}
+
+	private static final Set<String> HERB_NAMES = new HashSet<>(Arrays.asList(
+		"guam leaf", "marrentill", "tarromin", "harralander", "ranarr weed",
+		"toadflax", "irit leaf", "avantoe", "kwuarm", "snapdragon",
+		"cadantine", "lantadyme", "dwarf weed", "torstol", "huasca",
+		"snake weed", "rogue's purse", "ardrigal", "sito foil", "volencia moss"));
+
+	private static boolean isHerbName(String lowerName)
+	{
+		if (HERB_NAMES.contains(lowerName))
+		{
+			return true;
+		}
+		return lowerName.startsWith("grimy ")
+			&& HERB_NAMES.contains(lowerName.substring("grimy ".length()));
 	}
 }

@@ -357,6 +357,18 @@ public class InterfaceTracker
 	}
 
 	/**
+	 * True while an omnishop (points shop — Mixology rewards, NMZ imbues,
+	 * volcanic/fossil stores, etc.) is open. These stay suppressed for
+	 * noise, but purchases paid with varp currency arrive as pure inventory
+	 * gains and are credited rather than baselined away.
+	 */
+	public boolean isOmnishopOpen()
+	{
+		return openSuppressedInterfaces.contains(InterfaceID.OMNISHOP_MAIN)
+			|| openSuppressedInterfaces.contains(InterfaceID.OMNISHOP_SIDE);
+	}
+
+	/**
 	 * True if the most recently closed suppressed interface was the
 	 * item-sets interface — used to catch a conversion diff that arrives
 	 * one tick after the interface closed.
@@ -366,6 +378,18 @@ public class InterfaceTracker
 		return lastClosedSuppressedGroupAge <= LAST_CLOSED_GROUP_VALID_TICKS
 			&& (lastClosedSuppressedGroupId == InterfaceID.ITEMSETS
 			|| lastClosedSuppressedGroupId == InterfaceID.ITEMSETS_SIDE);
+	}
+
+	/**
+	 * True if the most recently closed suppressed interface was an
+	 * omnishop — used to catch a purchase diff that arrives one tick
+	 * after the interface closed, inside the re-baseline window.
+	 */
+	public boolean wasLastClosedGroupOmnishop()
+	{
+		return lastClosedSuppressedGroupAge <= LAST_CLOSED_GROUP_VALID_TICKS
+			&& (lastClosedSuppressedGroupId == InterfaceID.OMNISHOP_MAIN
+			|| lastClosedSuppressedGroupId == InterfaceID.OMNISHOP_SIDE);
 	}
 
 	public void onWidgetLoaded(int groupId)
