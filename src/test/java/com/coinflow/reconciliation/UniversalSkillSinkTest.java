@@ -104,6 +104,16 @@ public class UniversalSkillSinkTest
 		assertFalse(ConsumableRegistry.isSkillSink(construction, "Plank sack"));
 		assertFalse(ConsumableRegistry.isSkillSink(construction, "Coal"));
 
+		Set<Skill> herblore = Collections.singleton(Skill.HERBLORE);
+		assertTrue(ConsumableRegistry.isSkillSink(herblore, "Ranarr weed"));
+		assertTrue(ConsumableRegistry.isSkillSink(herblore, "Grimy ranarr weed"));
+		assertTrue(ConsumableRegistry.isSkillSink(herblore, "Guam leaf"));
+		assertTrue(ConsumableRegistry.isSkillSink(herblore, "Grimy huasca"));
+		assertTrue(ConsumableRegistry.isSkillSink(herblore, "Torstol"));
+		assertFalse(ConsumableRegistry.isSkillSink(herblore, "Ranarr seed"));
+		assertFalse(ConsumableRegistry.isSkillSink(herblore, "Grimy shield"));
+		assertFalse(ConsumableRegistry.isSkillSink(herblore, "Willow logs"));
+
 		Set<Skill> magic = Collections.singleton(Skill.MAGIC);
 		assertTrue(ConsumableRegistry.isSkillSink(magic, "Ensouled dragon head"));
 		assertFalse(ConsumableRegistry.isSkillSink(magic, "Dragon bones"));
