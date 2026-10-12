@@ -199,6 +199,24 @@ final class WeaponChargeTracker
 			Collections.emptySet(), Collections.singleton(AnimationID.SNAKEBOSS_BLOWPIPE_ATTACK), true,
 			Collections.emptySet(),
 			new ChargeCost(ItemID.SNAKEBOSS_SCALE, 2, 3)));
+		// Scythe of vitur: unique attack anim, 2 blood runes + 1/100 vial of
+		// blood per swing (100 charges per vial + 200 runes). The scythe has no
+		// charge varbit (charges live on the item), so like the blowpipe there
+		// is no dedupe. Slight overcount: a charge is only deducted when a hit
+		// lands, but the animation counts every swing. TODO verify other combat
+		// styles (Reap/Chop/Jab) share this anim
+		ATTACK_PROFILES.add(new AttackProfile("scythe of vitur",
+			Collections.emptySet(), Collections.singleton(AnimationID.SCYTHE_OF_VITUR_ATTACK), false,
+			Collections.emptySet(),
+			new ChargeCost(ItemID.BLOODRUNE, 2, 1),
+			new ChargeCost(ItemID.VIAL_BLOOD, 1, 100)));
+		// Viggora's/ursine chainmace: chainmace crush/stab anims, 1 ether per
+		// attack (hit or miss); shares the wilderness weapon varbit for dedup
+		ATTACK_PROFILES.add(new AttackProfile("chainmace",
+			Collections.emptySet(), new HashSet<>(Arrays.asList(
+				AnimationID.WILD_CAVE_CHAINMACE_CRUSH, AnimationID.WILD_CAVE_CHAINMACE_STAB)), false,
+			wildernessVarbit,
+			new ChargeCost(ItemID.WILD_CAVE_SHARD, 1, 1)));
 
 		// -- Varbit-tracked items --
 		// Items whose charges drain passively (no per-attack trigger), plus the attack
@@ -269,9 +287,10 @@ final class WeaponChargeTracker
 		CONFIGS.put(VarbitID.CHARGES_CRYSTAL_TOOLS_QUANTITY,
 			new WeaponConfig("crystal tool", new ChargeCost(ItemID.PRIF_CRYSTAL_SHARD, 1, 100)));
 
-		// Not covered: scythe of vitur (hitsplat-triggered, unimplemented), soulreaper axe,
-		// nightmare staves, abyssal tentacle, dizana's quiver, viggora's/ursine chainmaces
-		// (attack animations unknown).
+		// Not covered: nightmare staves (no per-attack cost), abyssal tentacle
+		// (degrades to breakage, not charged), dizana's quiver (no per-attack
+		// charge). The soulreaper axe intentionally needs no entry — it is
+		// created with blood runes but consumes no charges in combat.
 
 		DART_ITEM_IDS.put("bronze dart", ItemID.BRONZE_DART);
 		DART_ITEM_IDS.put("iron dart", ItemID.IRON_DART);
