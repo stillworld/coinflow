@@ -1395,6 +1395,91 @@ public class CoinFlowPluginEventTest
 	}
 
 	/**
+	 * Omnishop (points-shop) purchases pay a varp currency — the reward item
+	 * lands as a pure inventory gain while the interface is suppressed. It
+	 * must count as profit, not be swallowed by the close re-baseline.
+	 * (Observed: aldarium bought at the Mixology rewards shop.)
+	 */
+	@Test
+	public void omnishopPurchase_creditsRewardAsProfit()
+	{
+		stubTrackableItem(ItemID.ALDARIUM, "Aldarium", 9_000L);
+
+		plugin.previousInventorySnapshot = snapshot(ItemID.COINS, 1_000);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.OMNISHOP_MAIN);
+		plugin.onWidgetLoaded(open);
+		Assert.assertTrue(plugin.isTrackingSuppressed());
+
+		// Purchase lands while the shop is open
+		ItemContainer withReward = mockContainer(InventoryID.INV,
+			ItemID.COINS, 1_000, ItemID.ALDARIUM, 5);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, withReward));
+
+		Assert.assertEquals("Omnishop reward must count as profit",
+			45_000L, plugin.session.getTotalProfit());
+
+		// Closing re-baselines; the already-credited gain must not double
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.OMNISHOP_MAIN, 0, false));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, withReward));
+
+		Assert.assertEquals(45_000L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	/**
+	 * A purchase packet landing one tick after the omnishop closed falls
+	 * into the re-baseline window — it must still be credited as profit.
+	 */
+	@Test
+	public void omnishopPurchase_landingAfterClose_stillCredited()
+	{
+		stubTrackableItem(ItemID.ALDARIUM, "Aldarium", 9_000L);
+
+		plugin.previousInventorySnapshot = snapshot(ItemID.COINS, 1_000);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.OMNISHOP_MAIN);
+		plugin.onWidgetLoaded(open);
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.OMNISHOP_MAIN, 0, false));
+
+		ItemContainer withReward = mockContainer(InventoryID.INV,
+			ItemID.COINS, 1_000, ItemID.ALDARIUM, 2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, withReward));
+
+		Assert.assertEquals("Late omnishop purchase must count as profit",
+			18_000L, plugin.session.getTotalProfit());
+	}
+
+	/**
+	 * Other suppressed interfaces must keep swallowing diffs — the omnishop
+	 * gain credit must not leak into bank/GE re-baselines.
+	 */
+	@Test
+	public void bankCloseGain_doesNotCreditAsProfit()
+	{
+		stubTrackableItem(ItemID.ALDARIUM, "Aldarium", 9_000L);
+
+		plugin.previousInventorySnapshot = snapshot(ItemID.COINS, 1_000);
+		plugin.snapshotInitialized = true;
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.BANKMAIN);
+		plugin.onWidgetLoaded(open);
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.BANKMAIN, 0, false));
+
+		ItemContainer withReward = mockContainer(InventoryID.INV,
+			ItemID.COINS, 1_000, ItemID.ALDARIUM, 2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, withReward));
+
+		Assert.assertEquals("Post-bank diff must still re-baseline silently",
+			0L, plugin.session.getTotalProfit());
+	}
+
+	/**
 	 * Regression test for live bug: withdrawing an untradeable item (e.g. Bow string spool,
 	 * HA = 1,200 gp, GE = 0 gp) where the inventory update packet arrives immediately after
 	 * the bank widget closes. It must be absorbed without registering profit.
