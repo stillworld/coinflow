@@ -19,6 +19,12 @@ final class ActionClassifiers
 		{
 			return false;
 		}
+		// Coin pouches (Thieving) turn into coins in place — "Open" is a real
+		// gain, not a storage container, and must not trigger a re-baseline.
+		if (lowerTarget.equals("coin pouch"))
+		{
+			return false;
+		}
 		return lowerTarget.contains("gem bag") || lowerTarget.contains("gem sack")
 			|| lowerTarget.contains("gem pouch") || lowerTarget.contains("gem satchel") || lowerTarget.contains("gem tote")
 			|| lowerTarget.contains("herb sack")

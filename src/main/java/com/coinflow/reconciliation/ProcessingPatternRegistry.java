@@ -784,6 +784,21 @@ public final class ProcessingPatternRegistry
 	}
 
 	// ── 5. Smithing ───────────────────────────────────────────────────────
+	// Cannonball product name per bar. 1 bar yields 4 balls with either ammo
+	// mould (the double mould just consumes two bars per action). The dwarf
+	// cannon's ammo was renamed "Steel cannonball" with Sailing; granite and
+	// dragon cannonballs aren't smithed from bars, so they have no pairing.
+	private static final Map<String, String> CANNONBALL_BY_BAR = new HashMap<>();
+	static
+	{
+		CANNONBALL_BY_BAR.put("bronze bar", "bronze cannonball");
+		CANNONBALL_BY_BAR.put("iron bar", "iron cannonball");
+		CANNONBALL_BY_BAR.put("steel bar", "steel cannonball");
+		CANNONBALL_BY_BAR.put("mithril bar", "mithril cannonball");
+		CANNONBALL_BY_BAR.put("adamantite bar", "adamant cannonball");
+		CANNONBALL_BY_BAR.put("runite bar", "rune cannonball");
+	}
+
 	private static MatchResult matchSmithing(String lost, String gained, int gainedQty)
 	{
 		// 5. Smithing
@@ -872,8 +887,10 @@ public final class ProcessingPatternRegistry
 				}
 			}
 
-			// C. Cannonballs: Steel bar -> Cannonball (1 bar yields 4 cannonballs)
-			if (lost.equals("steel bar") && (gained.equals("cannonball") || gained.equals("granite cannonball")))
+			// C. Cannonballs: 1 <Metal> bar yields 4 <Metal> cannonballs.
+			// The bare "cannonball" pair stays for the pre-rename item name.
+			String expectedBall = CANNONBALL_BY_BAR.get(lost);
+			if (gained.equals(expectedBall) || (lost.equals("steel bar") && gained.equals("cannonball")))
 			{
 				int barsNeeded = (int) Math.ceil((double) gainedQty / 4);
 				return new MatchResult(barsNeeded, null, false);

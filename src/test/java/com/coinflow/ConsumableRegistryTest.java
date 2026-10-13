@@ -128,6 +128,24 @@ public class ConsumableRegistryTest
 	}
 
 	@Test
+	public void isConsumable_cannonballs_true()
+	{
+		// Legacy dwarf-cannon name plus the post-Sailing names
+		Assert.assertTrue(isConsumable(2, "Cannonball"));
+		Assert.assertTrue(isConsumable(2, "Steel cannonball"));
+		Assert.assertTrue(isConsumable(14090, "Granite cannonball"));
+		// Sailing ship-cannon tiers
+		Assert.assertTrue(isConsumable(45, "Bronze cannonball"));
+		Assert.assertTrue(isConsumable(46, "Iron cannonball"));
+		Assert.assertTrue(isConsumable(47, "Mithril cannonball"));
+		Assert.assertTrue(isConsumable(48, "Adamant cannonball"));
+		Assert.assertTrue(isConsumable(49, "Rune cannonball"));
+		Assert.assertTrue(isConsumable(50, "Dragon cannonball"));
+		Assert.assertTrue(isConsumable(51, "Iron chainshot cannonball"));
+		Assert.assertTrue(isConsumable(52, "Rune incendiary cannonball"));
+	}
+
+	@Test
 	public void isConsumable_teleports_true()
 	{
 		Assert.assertTrue(isConsumable(50, "Varrock teleport"));
