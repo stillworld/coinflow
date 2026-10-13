@@ -1776,7 +1776,6 @@ public class CoinFlowPluginEventTest
 	@Test
 	public void unsupportedWorld_latchesAndResumesOnReturn()
 	{
-		// onGameTick bails before the world check when no baseline exists
 		plugin.previousInventorySnapshot = snapshot();
 		plugin.snapshotInitialized = true;
 
@@ -1793,6 +1792,36 @@ public class CoinFlowPluginEventTest
 		Assert.assertFalse(plugin.wasUnsupportedWorld);
 		Assert.assertFalse(plugin.isTrackingSuppressed());
 		Assert.assertTrue("Leaving a special world must re-baseline", plugin.isNeedsRebaseline());
+	}
+
+	@Test
+	public void unsupportedWorld_latchesWithoutBaseline()
+	{
+		// Regression: a hop lands on a special world with the snapshot still
+		// uninitialized (login re-baseline pending). Suppressed container
+		// events re-baseline without setting snapshotInitialized, so the
+		// world check must run before the finalizePendingPickups bail or the
+		// pause latch stays unreachable for the entire stay.
+		plugin.snapshotInitialized = false;
+
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.DEADMAN));
+		when(client.getTickCount()).thenReturn(100);
+		plugin.onGameTick(new GameTick());
+		Assert.assertTrue("Pause latch must engage even with no baseline",
+			plugin.wasUnsupportedWorld);
+
+		// The session clock must not advance while paused
+		java.time.Duration before = plugin.session.getTotalInGameTime();
+		when(client.getTickCount()).thenReturn(101);
+		plugin.onGameTick(new GameTick());
+		Assert.assertEquals(before, plugin.session.getTotalInGameTime());
+
+		// Return to a normal world: resume path re-arms the login re-baseline
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS));
+		when(client.getTickCount()).thenReturn(102);
+		plugin.onGameTick(new GameTick());
+		Assert.assertFalse(plugin.wasUnsupportedWorld);
+		Assert.assertTrue(plugin.isNeedsRebaseline());
 	}
 
 	@Test

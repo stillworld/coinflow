@@ -60,6 +60,44 @@ final class GameTickProcessor
 
 		plugin.updateSuppressedRegion();
 
+		// Unsupported worlds pause tracking entirely — Leagues/DMM time must
+		// not dilute the main session's GP/hr. This latch runs before the
+		// snapshot gate below: on an unsupported world no baseline is ever
+		// taken (suppressed container events re-baseline without setting
+		// snapshotInitialized), so a check placed after finalizePendingPickups
+		// would be unreachable for the entire stay. On leaving, resume like a
+		// relog (the paused gap never counts) and re-baseline the inventory.
+		boolean unsupportedWorld = plugin.isUnsupportedWorld();
+		if (unsupportedWorld)
+		{
+			if (!plugin.wasUnsupportedWorld)
+			{
+				// Pause transitions get no session event, so ping the panel
+				// once to flip the "Paused" status on/off.
+				if (plugin.panel != null && plugin.session != null)
+				{
+					plugin.panel.updateSession(plugin.session);
+				}
+				log.debug("Unsupported world ({}), pausing tracking",
+					plugin.client.getWorldType());
+			}
+			plugin.wasUnsupportedWorld = true;
+		}
+		else if (plugin.wasUnsupportedWorld)
+		{
+			plugin.wasUnsupportedWorld = false;
+			if (plugin.session != null)
+			{
+				plugin.session = plugin.session.withResumedState();
+			}
+			plugin.interfaceTracker.setNeedsRebaseline(true);
+			if (plugin.panel != null && plugin.session != null)
+			{
+				plugin.panel.updateSession(plugin.session);
+			}
+			log.debug("Left unsupported world, resuming session");
+		}
+
 		if (!plugin.containerPickupTracker.finalizePendingPickups())
 		{
 			return;
@@ -169,40 +207,6 @@ final class GameTickProcessor
 					return false;
 				});
 			}
-		}
-
-		// Unsupported worlds pause tracking entirely — Leagues/DMM time must
-		// not dilute the main session's GP/hr. On leaving, resume like a
-		// relog (the paused gap never counts) and re-baseline the inventory.
-		boolean unsupportedWorld = plugin.isUnsupportedWorld();
-		if (unsupportedWorld)
-		{
-			if (!plugin.wasUnsupportedWorld)
-			{
-				// Pause transitions get no session event, so ping the panel
-				// once to flip the "Paused" status on/off.
-				if (plugin.panel != null && plugin.session != null)
-				{
-					plugin.panel.updateSession(plugin.session);
-				}
-				log.debug("Unsupported world ({}), pausing tracking",
-					plugin.client.getWorldType());
-			}
-			plugin.wasUnsupportedWorld = true;
-		}
-		else if (plugin.wasUnsupportedWorld)
-		{
-			plugin.wasUnsupportedWorld = false;
-			if (plugin.session != null)
-			{
-				plugin.session = plugin.session.withResumedState();
-			}
-			plugin.interfaceTracker.setNeedsRebaseline(true);
-			if (plugin.panel != null && plugin.session != null)
-			{
-				plugin.panel.updateSession(plugin.session);
-			}
-			log.debug("Left unsupported world, resuming session");
 		}
 
 		// Update idle state and time tracking on each tick
