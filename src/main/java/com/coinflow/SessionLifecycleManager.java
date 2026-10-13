@@ -34,6 +34,7 @@ final class SessionLifecycleManager
 
 		if (state == GameState.LOGGED_IN)
 		{
+			checkAccount();
 			if (plugin.session != null)
 			{
 				plugin.session = plugin.session.withResumedState();
@@ -57,6 +58,34 @@ final class SessionLifecycleManager
 			plugin.deathTracker.discardPending();
 			resetTransientTrackingState();
 		}
+	}
+
+	/**
+	 * Sessions, GE cost basis and the death recovery ledger belong to one
+	 * account. A different account logging in resets everything so account
+	 * A's observations can never book fills or recoveries for account B.
+	 * Called from the account-hash event, on LOGGED_IN, and at the top of
+	 * {@link CoinFlowPlugin#onGrandExchangeOfferChanged} — offer events can
+	 * arrive before the game-state transition finishes. Idempotent; a hash
+	 * of -1 (logout / not yet identified) is ignored.
+	 */
+	void checkAccount()
+	{
+		if (plugin.client == null)
+		{
+			return;
+		}
+		long hash = plugin.client.getAccountHash();
+		if (hash == -1)
+		{
+			return;
+		}
+		if (plugin.lastAccountHash != -1 && hash != plugin.lastAccountHash)
+		{
+			log.info("Account switched, resetting Coin Flow session");
+			resetSession();
+		}
+		plugin.lastAccountHash = hash;
 	}
 
 	void onConfigChanged(ConfigChanged event)

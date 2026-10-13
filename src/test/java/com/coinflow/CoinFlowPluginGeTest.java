@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import java.util.EnumSet;
 import java.util.HashSet;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -9,6 +10,9 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuEntry;
+import net.runelite.api.WorldType;
+import net.runelite.api.events.AccountHashChanged;
+import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GrandExchangeOfferChanged;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuOptionClicked;
@@ -413,5 +417,96 @@ public class CoinFlowPluginGeTest
 		offerChanged(0, offer(GrandExchangeOfferState.SELLING, SHARK, 0, 10, 1000, 0));
 		offerChanged(0, offer(GrandExchangeOfferState.SOLD, SHARK, 10, 10, 1000, 10000));
 		Assert.assertNull(plugin.getSession());
+	}
+
+	// ── Account switching & special worlds ─────────────────────────────
+
+	@Test
+	public void accountSwitch_resetsSessionBasisAndLedger()
+	{
+		when(client.getAccountHash()).thenReturn(1111L);
+		plugin.lastAccountHash = 1111L;
+
+		stubTrackableItem(SHARK, "Shark", 1000L);
+		offerChanged(0, offer(GrandExchangeOfferState.BUYING, SHARK, 0, 10, 1000, 0));
+		offerChanged(0, offer(GrandExchangeOfferState.BOUGHT, SHARK, 10, 10, 1000, 10000));
+		Assert.assertEquals(10, plugin.grandExchangeTracker.basisQuantity(SHARK));
+
+		// A different account logs in — the hash event arrives first
+		when(client.getAccountHash()).thenReturn(2222L);
+		plugin.onAccountHashChanged(new AccountHashChanged());
+
+		Assert.assertEquals("Basis must not carry to another account",
+			0, plugin.grandExchangeTracker.basisQuantity(SHARK));
+		Assert.assertEquals(2222L, plugin.lastAccountHash);
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+	}
+
+	@Test
+	public void geOfferBeforeLoginOnNewAccount_noPhantomFill()
+	{
+		when(client.getAccountHash()).thenReturn(1111L);
+		plugin.lastAccountHash = 1111L;
+		stubTrackableItem(SHARK, "Shark", 1000L);
+
+		// Account A had 3/10 sold at 1,000 each when it logged out
+		offerChanged(0, offer(GrandExchangeOfferState.SELLING, SHARK, 3, 10, 1000, 3000));
+
+		// Account B logs in. Its slot 0 shows a completed sell of the same
+		// item — without the re-key this would book a phantom fill of 7.
+		when(client.getAccountHash()).thenReturn(2222L);
+		when(client.getGameState()).thenReturn(GameState.LOGGING_IN);
+		offerChanged(0, offer(GrandExchangeOfferState.SOLD, SHARK, 10, 10, 1000, 10000));
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void sameAccountRelog_keepsSession()
+	{
+		when(client.getAccountHash()).thenReturn(1111L);
+		plugin.lastAccountHash = 1111L;
+
+		stubTrackableItem(HELM, "Dragon med helm", 59000L);
+		offerChanged(0, offer(GrandExchangeOfferState.SELLING, HELM, 0, 1, 59000, 0));
+		offerChanged(0, offer(GrandExchangeOfferState.SOLD, HELM, 1, 1, 59000, 59000));
+		long expenses = plugin.session.getTotalExpenses();
+		Assert.assertTrue(expenses > 0);
+
+		GameStateChanged logout = new GameStateChanged();
+		logout.setGameState(GameState.LOGIN_SCREEN);
+		plugin.onGameStateChanged(logout);
+		GameStateChanged login = new GameStateChanged();
+		login.setGameState(GameState.LOGGED_IN);
+		plugin.onGameStateChanged(login);
+
+		Assert.assertEquals("Same-account relog must keep the session",
+			expenses, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void unknownAccountHash_ignored()
+	{
+		plugin.lastAccountHash = 1111L;
+		when(client.getAccountHash()).thenReturn(-1L);
+
+		plugin.onAccountHashChanged(new AccountHashChanged());
+
+		Assert.assertEquals(1111L, plugin.lastAccountHash);
+	}
+
+	@Test
+	public void unsupportedWorld_ignoresOffers()
+	{
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.SEASONAL));
+		stubTrackableItem(SHARK, "Shark", 1000L);
+
+		offerChanged(0, offer(GrandExchangeOfferState.SELLING, SHARK, 0, 10, 1000, 0));
+		offerChanged(0, offer(GrandExchangeOfferState.SOLD, SHARK, 10, 10, 1000, 10000));
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals("No GE tax on special worlds",
+			0L, plugin.session.getTotalExpenses());
 	}
 }

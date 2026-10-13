@@ -2,6 +2,7 @@ package com.coinflow;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +22,7 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
@@ -1751,6 +1753,46 @@ public class CoinFlowPluginEventTest
 		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SAILING_BOAT_CARGOHOLD, 0, false));
 		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE, 0, false));
 		Assert.assertTrue(plugin.isNeedsRebaseline());
+	}
+
+	// ── Unsupported worlds ────────────────────────────────────────────
+
+	@Test
+	public void unsupportedWorld_suppressesDiffs()
+	{
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.SEASONAL));
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.snapshotInitialized = true;
+
+		stubTrackableItem(555, "Iron ore", 200L);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, 555, 5)));
+
+		Assert.assertTrue("Special worlds must suppress tracking", plugin.isTrackingSuppressed());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void unsupportedWorld_latchesAndResumesOnReturn()
+	{
+		// onGameTick bails before the world check when no baseline exists
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.snapshotInitialized = true;
+
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.DEADMAN));
+		when(client.getTickCount()).thenReturn(100);
+		plugin.onGameTick(new GameTick());
+		Assert.assertTrue(plugin.wasUnsupportedWorld);
+
+		// Returning to a normal world clears the latch and re-baselines
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS));
+		when(client.getTickCount()).thenReturn(101);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertFalse(plugin.wasUnsupportedWorld);
+		Assert.assertFalse(plugin.isTrackingSuppressed());
+		Assert.assertTrue("Leaving a special world must re-baseline", plugin.isNeedsRebaseline());
 	}
 
 	@Test

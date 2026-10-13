@@ -5,6 +5,8 @@ import com.google.inject.Injector;
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -22,6 +24,8 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.Skill;
 import net.runelite.api.EquipmentInventorySlot;
+import net.runelite.api.WorldType;
+import net.runelite.api.events.AccountHashChanged;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
@@ -189,9 +193,45 @@ public class CoinFlowPlugin extends Plugin
 	 */
 	int rebaselineGraceTicks;
 
+	/**
+	 * The RuneScape account hash of the account this session belongs to.
+	 * Session totals, GE observations/cost basis and the death recovery ledger
+	 * are all per-account; a different account logging in resets everything
+	 * ({@link SessionLifecycleManager#checkAccount()}). -1 = unknown.
+	 */
+	long lastAccountHash = -1;
+
+	/**
+	 * Latched while the player is on an unsupported world; cleared by
+	 * {@link GameTickProcessor} which then resumes the session clock and
+	 * schedules a re-baseline.
+	 */
+	boolean wasUnsupportedWorld;
+
+	/**
+	 * World types with a separate economy (or no persistent economy at all).
+	 * Items there cannot be priced at main-game GE prices, and their GE
+	 * offers would feed the main session's cost basis, so tracking pauses.
+	 */
+	private static final Set<WorldType> UNSUPPORTED_WORLD_TYPES = Collections.unmodifiableSet(EnumSet.of(
+		WorldType.SEASONAL, WorldType.DEADMAN, WorldType.BETA_WORLD, WorldType.TOURNAMENT_WORLD,
+		WorldType.FRESH_START_WORLD, WorldType.QUEST_SPEEDRUNNING, WorldType.NOSAVE_MODE));
+
+	/**
+	 * True while the player is on a world with a separate economy. Evaluated
+	 * live rather than latched at LOGGED_IN: GE offer events can arrive before
+	 * the game-state transition finishes, and they must see the new world.
+	 */
+	boolean isUnsupportedWorld()
+	{
+		return client != null && client.getWorldType() != null
+			&& !Collections.disjoint(client.getWorldType(), UNSUPPORTED_WORLD_TYPES);
+	}
+
 	boolean isTrackingSuppressed()
 	{
-		return interfaceTracker.isTrackingSuppressed() || minigameHudVisible || minigameHudGraceTicks > 0;
+		return interfaceTracker.isTrackingSuppressed() || minigameHudVisible || minigameHudGraceTicks > 0
+			|| isUnsupportedWorld();
 	}
 
 	/**
@@ -424,6 +464,8 @@ public class CoinFlowPlugin extends Plugin
 		previousEquipmentSnapshot = null;
 		snapshotInitialized = false;
 		lootingBagInitialized = false;
+		lastAccountHash = client != null ? client.getAccountHash() : -1;
+		wasUnsupportedWorld = false;
 		interfaceTracker.reset(client != null && client.getGameState() != null ? client.getGameState() : GameState.UNKNOWN);
 		grandExchangeTracker.reset();
 		deathTracker.reset();
@@ -496,6 +538,12 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onAccountHashChanged(AccountHashChanged event)
+	{
+		lifecycleManager.checkAccount();
+	}
+
+	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
 		deathFlowCoordinator.onActorDeath(event);
@@ -523,6 +571,17 @@ public class CoinFlowPlugin extends Plugin
 	public void onGrandExchangeOfferChanged(GrandExchangeOfferChanged event)
 	{
 		if (session == null)
+		{
+			return;
+		}
+
+		// Offer events for the new account can arrive before LOGGED_IN —
+		// re-key here so they never delta against the previous account.
+		lifecycleManager.checkAccount();
+
+		// Special worlds have their own GE/economy; ignore their offers so
+		// the main session's observations and basis stay untouched.
+		if (isUnsupportedWorld())
 		{
 			return;
 		}
