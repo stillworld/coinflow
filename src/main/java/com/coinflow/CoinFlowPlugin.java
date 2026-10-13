@@ -415,6 +415,16 @@ public class CoinFlowPlugin extends Plugin
 	final Map<Integer, Integer> recentDropIntents = new HashMap<>();
 	static final int DROP_INTENT_WINDOW_TICKS = 2;
 
+	/**
+	 * Canonical item id -> tick of the player's most recent "Open"/"Loot"/
+	 * "Search" click on an inventory item (packs, caskets, impling jars). A
+	 * loss of that item within the window is the pack being consumed for its
+	 * contents — a supply expense, not a drop. Restricted to CC_OP clicks so
+	 * object actions (STASH units, chests) cannot mint false intents.
+	 */
+	final Map<Integer, Integer> recentOpenIntents = new HashMap<>();
+	static final int OPEN_INTENT_WINDOW_TICKS = 3;
+
 	static class LootPickup
 	{
 		final int itemId;
@@ -441,6 +451,7 @@ public class CoinFlowPlugin extends Plugin
 	final SessionApplier sessionApplier = new SessionApplier(this);
 
 	final ContainerPickupTracker containerPickupTracker = new ContainerPickupTracker(this);
+	final CannonTracker cannonTracker = new CannonTracker(this);
 	final DeathFlowCoordinator deathFlowCoordinator = new DeathFlowCoordinator(this);
 	final MenuIntentHandler menuIntentHandler = new MenuIntentHandler(this);
 	final ChatMessageHandler chatMessageHandler = new ChatMessageHandler(this);
@@ -469,6 +480,7 @@ public class CoinFlowPlugin extends Plugin
 		interfaceTracker.reset(client != null && client.getGameState() != null ? client.getGameState() : GameState.UNKNOWN);
 		grandExchangeTracker.reset();
 		deathTracker.reset();
+		cannonTracker.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -521,6 +533,7 @@ public class CoinFlowPlugin extends Plugin
 		interfaceTracker.reset(GameState.UNKNOWN);
 		grandExchangeTracker.reset();
 		deathTracker.reset();
+		cannonTracker.reset();
 	}
 
 	@Provides
@@ -1328,6 +1341,36 @@ public class CoinFlowPlugin extends Plugin
 	{
 		recentDropIntents.values().removeIf(t -> currentTick - t > DROP_INTENT_WINDOW_TICKS);
 		return new HashSet<>(recentDropIntents.keySet());
+	}
+
+	/**
+	 * Whether a loss of {@code canonicalItemId} at {@code currentTick} carries a
+	 * live Drop-click intent (i.e. it is a drop, not a consumption/deploy).
+	 */
+	boolean isDropIntentActive(int canonicalItemId, int currentTick)
+	{
+		Integer tick = recentDropIntents.get(canonicalItemId);
+		return tick != null && currentTick - tick <= DROP_INTENT_WINDOW_TICKS;
+	}
+
+	/**
+	 * Whether a loss of {@code canonicalItemId} at {@code currentTick} carries a
+	 * live Open/Loot/Search intent (the item was consumed for its contents).
+	 */
+	boolean isOpenIntentActive(int canonicalItemId, int currentTick)
+	{
+		Integer tick = recentOpenIntents.get(canonicalItemId);
+		return tick != null && currentTick - tick <= OPEN_INTENT_WINDOW_TICKS;
+	}
+
+	/**
+	 * Drops open intents older than the window and returns the canonical ids
+	 * still live.
+	 */
+	Set<Integer> expireOpenIntents(int currentTick)
+	{
+		recentOpenIntents.values().removeIf(t -> currentTick - t > OPEN_INTENT_WINDOW_TICKS);
+		return new HashSet<>(recentOpenIntents.keySet());
 	}
 
 	void removeRecentlyUnequipped(int itemId, int quantity)

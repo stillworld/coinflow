@@ -301,6 +301,12 @@ final class SessionLifecycleManager
 		plugin.lastLootingBagDepositItemName = null;
 		plugin.lastNotingServiceTick = -100;
 		plugin.recentDropIntents.clear();
+		plugin.recentOpenIntents.clear();
+		// The deployed-cannon ledger survives logout (a deployed cannon does
+		// too — reclaimable from Nulodion), but the loaded-balls estimate does
+		// not: ball state on relog is unknown, so fewer reversals are safer
+		// than phantom ones.
+		plugin.cannonTracker.clearLoadedBalls();
 		plugin.rebaselineGraceTicks = 0;
 		plugin.minigameHudVisible = false;
 		plugin.minigameHudGraceTicks = 0;
@@ -337,6 +343,7 @@ final class SessionLifecycleManager
 		plugin.goalCompletedNotified = false;
 		plugin.grandExchangeTracker.reset();
 		plugin.deathTracker.reset();
+		plugin.cannonTracker.reset();
 		if (plugin.client != null && plugin.client.getGameState() == GameState.LOGGED_IN)
 		{
 			plugin.grandExchangeTracker.seed(plugin.client.getGrandExchangeOffers());

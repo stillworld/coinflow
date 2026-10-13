@@ -8119,6 +8119,130 @@ public class CoinFlowPluginEventTest
 		Assert.assertTrue("Goal completed notified flag should be set", plugin.goalCompletedNotified);
 		org.mockito.Mockito.verify(notifier).notify(org.mockito.ArgumentMatchers.contains("Gross Goal"));
 	}
+
+	// ── Open/Loot pack intents (opened-item expensing) ───────────────────
+
+	private void clickOpen(int itemId, String target, net.runelite.api.MenuAction action)
+	{
+		net.runelite.api.MenuEntry entry = mock(net.runelite.api.MenuEntry.class);
+		when(entry.getOption()).thenReturn("Open");
+		when(entry.getTarget()).thenReturn("<col=ff9040>" + target + "</col>");
+		when(entry.getType()).thenReturn(action);
+		when(entry.getItemId()).thenReturn(itemId);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(entry));
+	}
+
+	@Test
+	public void openPack_expensesItemAtMarketPrice()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV))); // casket consumed, loot lands later
+
+		Assert.assertEquals(1_000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(-1_000L, plugin.session.getTotalProfit());
+		Assert.assertNull("Opened packs must not enter drop bookkeeping",
+			plugin.recentlyDroppedOwnedItems.get(casketId));
+		Assert.assertTrue("Intent consumed once the loss is seen", plugin.recentOpenIntents.isEmpty());
+	}
+
+	@Test
+	public void openPack_lootBooksAgainstCost()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		int lootId = ItemID.MITHRIL_PLATEBODY;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+		stubTrackableItem(lootId, "Mithril platebody", 3_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, lootId, 1)));
+
+		Assert.assertEquals(1_000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(2_000L, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void openOnObject_doesNotMintIntent()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		// "Open" on a world object (STASH unit, chest) — no inventory intent.
+		clickOpen(0, "Chest", net.runelite.api.MenuAction.GAME_OBJECT_FIRST_OPTION);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
+	}
+
+	@Test
+	public void openOnContainer_rebaselinesWithoutOpenIntent()
+	{
+		int gemBagId = ItemID.GEM_BAG;
+		stubTrackableItem(gemBagId, "Gem bag", 0L);
+
+		clickOpen(gemBagId, "Gem bag", net.runelite.api.MenuAction.CC_OP);
+
+		Assert.assertTrue(plugin.isNeedsRebaseline());
+		Assert.assertTrue(plugin.recentOpenIntents.isEmpty());
+	}
+
+	@Test
+	public void openPack_boughtItem_chargesCarriedBasis()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		// Bought earlier this session for 800 — the market price (1000) must
+		// not be charged; the carried purchase basis is.
+		plugin.grandExchangeTracker.addBasis(casketId, 1, 800L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(800L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(casketId));
+	}
+
+	@Test
+	public void openPack_staleIntent_doesNotExpense()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		when(client.getTickCount()).thenReturn(10);
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+
+		// The click did not consume the item; it leaves 5 ticks later with no
+		// live intent — a plain loss, not a pack open.
+		when(client.getTickCount()).thenReturn(15);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
+	}
 }
 
 

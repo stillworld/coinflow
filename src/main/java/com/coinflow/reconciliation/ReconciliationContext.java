@@ -128,6 +128,19 @@ public class ReconciliationContext
 	}
 
 	/**
+	 * Canonical item ids the player recently clicked "Open"/"Loot"/"Search" on
+	 * in their inventory. A loss of one of these this tick is the pack being
+	 * consumed for its contents — a supply expense, not a drop.
+	 */
+	@Getter
+	private final java.util.Set<Integer> openIntentIds = new java.util.HashSet<>();
+
+	public boolean isOpenIntent(int canonicalItemId)
+	{
+		return openIntentIds.contains(canonicalItemId);
+	}
+
+	/**
 	 * Whether "Drop" clicks should be recorded as supply expenses. Requires
 	 * spent tracking, since expenses are discarded when it is off and the drop
 	 * would otherwise vanish from both gross and spent.

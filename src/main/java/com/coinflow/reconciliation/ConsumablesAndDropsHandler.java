@@ -79,8 +79,15 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 			// expense; other crumble items (e.g. Ring of recoil) are excluded here
 			// because an inventory loss usually means feeding a Ring of suffering,
 			// which WeaponChargeTracker expenses separately.
+			// An "Open"/"Loot"/"Search" intent means the pack item (casket,
+			// impling jar, supply crate) was consumed for its contents — a
+			// supply expense like ammo or food. repriceFromBasis swaps in
+			// carried purchase basis so a bought-then-opened item is charged
+			// at cost, and the loss stays out of the drop bookkeeping where
+			// it would suppress a later genuine pickup.
 			boolean isConsumable = !context.isDropIntent(itemId)
-				&& (ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
+				&& (context.isOpenIntent(itemId)
+				|| ConsumableRegistry.isConsumable(itemId, itemName, itemManager)
 				|| ConsumableRegistry.isSkillSink(context.getActiveSkillingSkills(), itemName)
 				|| ConsumableRegistry.isLastChargeTeleportJewelry(itemName));
 

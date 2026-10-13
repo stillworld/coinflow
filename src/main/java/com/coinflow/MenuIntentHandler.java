@@ -114,7 +114,8 @@ final class MenuIntentHandler
 			|| "Empty basket".equalsIgnoreCase(option)
 			|| "Open".equalsIgnoreCase(option) || "Close".equalsIgnoreCase(option)
 			|| "Charge".equalsIgnoreCase(option) || "Uncharge".equalsIgnoreCase(option)
-			|| "Unload".equalsIgnoreCase(option))
+			|| "Unload".equalsIgnoreCase(option)
+			|| "Loot".equalsIgnoreCase(option) || "Search".equalsIgnoreCase(option))
 		{
 			String lowerTarget = target.toLowerCase(Locale.ROOT);
 			if (ActionClassifiers.isContainerOrChargedItemTarget(lowerTarget))
@@ -126,6 +127,19 @@ final class MenuIntentHandler
 				plugin.interfaceTracker.setNeedsRebaseline(true);
 				plugin.rebaselineGraceTicks = 3;
 				log.debug("Container/charged item action clicked ('{}' on '{}'), scheduling rebaseline", option, target);
+			}
+			// "Open"/"Loot"/"Search" on an inventory pack item (casket, impling
+			// jar, supply crate) consumes the item for its contents. CC_OP +
+			// itemId restricts this to inventory clicks — object opens (STASH
+			// units, chests) are GAME_OBJECT actions and must not mint intents.
+			else if (("Open".equalsIgnoreCase(option) || "Loot".equalsIgnoreCase(option)
+				|| "Search".equalsIgnoreCase(option))
+				&& event.getMenuAction() == net.runelite.api.MenuAction.CC_OP
+				&& event.getItemId() > 0)
+			{
+				int openId = plugin.itemManager != null ? plugin.itemManager.canonicalize(event.getItemId()) : event.getItemId();
+				plugin.recentOpenIntents.put(openId, tick);
+				log.debug("Open/loot intent on inventory item '{}' (id {}), recording", target, openId);
 			}
 		}
 		else if (option.toLowerCase(Locale.ROOT).startsWith("collect")
