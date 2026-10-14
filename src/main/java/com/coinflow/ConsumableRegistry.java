@@ -486,7 +486,10 @@ public final class ConsumableRegistry
 			|| lower.endsWith(" thrownaxe") || lower.endsWith(" thrownaxes") || lower.contains("thrownaxe(")
 			|| lower.endsWith(" javelin") || lower.endsWith(" javelins") || lower.contains("javelin(")
 			|| lower.contains("chinchompa")
-			|| lower.equals("cannonball") || lower.equals("granite cannonball")
+			// "Cannonball" is the legacy name — since Sailing the dwarf-cannon
+			// ball is "Steel cannonball" and ship cannons fire bronze–dragon,
+			// chainshot and incendiary cannonballs.
+			|| lower.equals("cannonball") || lower.endsWith(" cannonball")
 			|| lower.contains("sunfire splinter");
 	}
 

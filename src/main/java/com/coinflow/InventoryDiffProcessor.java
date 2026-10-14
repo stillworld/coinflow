@@ -434,6 +434,17 @@ final class InventoryDiffProcessor
 
 			if (!isProcessing)
 			{
+				// Cannon setup/pick-up inside a re-baseline window still has to
+				// net against deployed parts/loaded balls or the tracker stays
+				// deployed forever; returned balls reverse the earlier load
+				// expense rather than being swallowed by the baseline.
+				Map<Integer, Long> cannonReversals = plugin.cannonTracker.netDiff(rawGains, rawLosses,
+					plugin.client != null ? plugin.client.getTickCount() : 0,
+					plugin.interfaceTracker.isShopOpen());
+				if (!cannonReversals.isEmpty())
+				{
+					plugin.session = plugin.session.withExpenseReversal(cannonReversals);
+				}
 				// A set<->components conversion whose packet arrived after the
 				// Sets interface closed is swallowed by this baseline — still
 				// carry its cost basis across. (Only when the diff is actually
@@ -528,6 +539,14 @@ final class InventoryDiffProcessor
 			// Wilderness death-drop pickups carrying a Take click reverse the
 			// Death charge rather than counting as fresh loot.
 			plugin.matchDeathPickupGains(rawGains);
+
+			// Deployed-cannon traffic: part losses mark the cannon deployed,
+			// ball losses count as loaded, and returned parts/balls strip the
+			// gain — returned balls carry an expense reversal so the earlier
+			// load spend is undone instead of the kit booking as loot.
+			Map<Integer, Long> cannonReversals = plugin.cannonTracker.netDiff(rawGains, rawLosses,
+				plugin.client != null ? plugin.client.getTickCount() : 0,
+				plugin.interfaceTracker.isShopOpen());
 
 			// ── Dialogue purchase (Zaff, Ali Morrisane, etc.) ─────────────
 			// Coins were the only thing lost and non-coin items arrived in the
@@ -643,6 +662,20 @@ final class InventoryDiffProcessor
 					}
 				}
 			}
+			Set<Integer> liveOpenIntents = plugin.expireOpenIntents(currentTick);
+			if (!liveOpenIntents.isEmpty())
+			{
+				for (int lostId : rawLosses.keySet())
+				{
+					int canonicalLost = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostId) : lostId;
+					if (liveOpenIntents.contains(canonicalLost))
+					{
+						context.getOpenIntentIds().add(canonicalLost);
+						plugin.recentOpenIntents.remove(canonicalLost);
+					}
+				}
+			}
+			cannonReversals.forEach(context::addExpenseReversal);
 
 			if (plugin.client != null)
 			{

@@ -183,6 +183,47 @@ public class ProcessingPatternRegistryTest
 	}
 
 	@Test
+	public void smithing_cannonballs_1BarYields4()
+	{
+		// Both names for the dwarf-cannon ball
+		ProcessingPatternRegistry.MatchResult legacy =
+			ProcessingPatternRegistry.match("Steel bar", "Cannonball", 4);
+		Assert.assertNotNull(legacy);
+		Assert.assertEquals(1, legacy.getPrimaryConsumedQty());
+
+		ProcessingPatternRegistry.MatchResult renamed =
+			ProcessingPatternRegistry.match("Steel bar", "Steel cannonball", 4);
+		Assert.assertNotNull(renamed);
+		Assert.assertEquals(1, renamed.getPrimaryConsumedQty());
+
+		// Sailing tiers (partial batches round up to whole bars)
+		ProcessingPatternRegistry.MatchResult rune =
+			ProcessingPatternRegistry.match("Runite bar", "Rune cannonball", 6);
+		Assert.assertNotNull(rune);
+		Assert.assertEquals(2, rune.getPrimaryConsumedQty());
+
+		ProcessingPatternRegistry.MatchResult adamant =
+			ProcessingPatternRegistry.match("Adamantite bar", "Adamant cannonball", 8);
+		Assert.assertNotNull(adamant);
+		Assert.assertEquals(2, adamant.getPrimaryConsumedQty());
+
+		ProcessingPatternRegistry.MatchResult bronze =
+			ProcessingPatternRegistry.match("Bronze bar", "Bronze cannonball", 4);
+		Assert.assertNotNull(bronze);
+		Assert.assertEquals(1, bronze.getPrimaryConsumedQty());
+	}
+
+	@Test
+	public void smithing_cannonballs_unrelatedBalls_noMatch()
+	{
+		// Granite/dragon cannonballs are not smithed from bars
+		Assert.assertNull(ProcessingPatternRegistry.match("Steel bar", "Granite cannonball", 4));
+		// Incendiary/chainshot upgrades consume finished balls, not bars
+		Assert.assertNull(ProcessingPatternRegistry.match("Runite bar", "Rune incendiary cannonball", 2));
+		Assert.assertNull(ProcessingPatternRegistry.match("Runite bar", "Rune chainshot cannonball", 2));
+	}
+
+	@Test
 	public void fletching_broadArrows_requiresBroadArrowheads()
 	{
 		ProcessingPatternRegistry.MatchResult res =

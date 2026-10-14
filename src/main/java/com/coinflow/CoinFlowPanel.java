@@ -1325,8 +1325,10 @@ public class CoinFlowPanel extends PluginPanel
 		boolean trackSpent = config.trackSpent();
 
 		// Session card
+		boolean worldPaused = plugin.isUnsupportedWorld();
 		long totalProfit = trackSpent ? session.getTotalProfit() : session.getGrossProfit();
-		sessionProfitCaption.setText(trackSpent ? "Net Profit" : "Profit");
+		sessionProfitCaption.setText(worldPaused ? "Paused — unsupported world" : (trackSpent ? "Net Profit" : "Profit"));
+		sessionProfitCaption.setForeground(worldPaused ? WARN_ORANGE : ColorScheme.LIGHT_GRAY_COLOR);
 		sessionProfitLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.formatNumber(Math.abs(totalProfit)) + " gp");
 		sessionProfitLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);
 		boolean isIdle = session.isIdle();

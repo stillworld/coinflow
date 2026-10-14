@@ -2,6 +2,7 @@ package com.coinflow;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +22,7 @@ import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
+import net.runelite.api.WorldType;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
@@ -1689,6 +1691,137 @@ public class CoinFlowPluginEventTest
 			Assert.assertFalse("Interface " + interfaceId + " close must restore tracking",
 				plugin.isTrackingSuppressed());
 		}
+	}
+
+	/**
+	 * Sailing cargo holds and tool leprechaun storage are inventory transfers:
+	 * deposits must not book as consumption/drops, and withdrawals must not
+	 * book as loot.
+	 */
+	@Test
+	public void storageInterfaces_suppressTracking()
+	{
+		for (int interfaceId : new int[]{
+			InterfaceID.SAILING_BOAT_CARGOHOLD,
+			InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE,
+			InterfaceID.FARMING_TOOLS,
+			InterfaceID.FARMING_TOOLS_SIDE
+		})
+		{
+			WidgetLoaded open = new WidgetLoaded();
+			open.setGroupId(interfaceId);
+			plugin.onWidgetLoaded(open);
+
+			Assert.assertTrue("Interface " + interfaceId + " must suppress tracking",
+				plugin.isTrackingSuppressed());
+
+			plugin.onWidgetClosed(new WidgetClosed(interfaceId, 0, false));
+			Assert.assertFalse("Interface " + interfaceId + " close must restore tracking",
+				plugin.isTrackingSuppressed());
+		}
+	}
+
+	@Test
+	public void cargoHold_depositAndWithdraw_booksNothing()
+	{
+		// Baseline: 10 sharks in inventory
+		stubTrackableItem(385, "Shark", 800L);
+		plugin.previousInventorySnapshot = snapshot(385, 10);
+		plugin.snapshotInitialized = true;
+
+		// Open cargo hold (main + side panels)
+		WidgetLoaded openMain = new WidgetLoaded();
+		openMain.setGroupId(InterfaceID.SAILING_BOAT_CARGOHOLD);
+		plugin.onWidgetLoaded(openMain);
+		WidgetLoaded openSide = new WidgetLoaded();
+		openSide.setGroupId(InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE);
+		plugin.onWidgetLoaded(openSide);
+
+		// Deposit 4 sharks — must not book as consumed supplies
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, 385, 6)));
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+
+		// Withdraw them again — must not book as loot
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, 385, 10)));
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+
+		// Close the cargo hold; the restored inventory re-baselines
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SAILING_BOAT_CARGOHOLD, 0, false));
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE, 0, false));
+		Assert.assertTrue(plugin.isNeedsRebaseline());
+	}
+
+	// ── Unsupported worlds ────────────────────────────────────────────
+
+	@Test
+	public void unsupportedWorld_suppressesDiffs()
+	{
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.SEASONAL));
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.snapshotInitialized = true;
+
+		stubTrackableItem(555, "Iron ore", 200L);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, 555, 5)));
+
+		Assert.assertTrue("Special worlds must suppress tracking", plugin.isTrackingSuppressed());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void unsupportedWorld_latchesAndResumesOnReturn()
+	{
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.snapshotInitialized = true;
+
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.DEADMAN));
+		when(client.getTickCount()).thenReturn(100);
+		plugin.onGameTick(new GameTick());
+		Assert.assertTrue(plugin.wasUnsupportedWorld);
+
+		// Returning to a normal world clears the latch and re-baselines
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS));
+		when(client.getTickCount()).thenReturn(101);
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertFalse(plugin.wasUnsupportedWorld);
+		Assert.assertFalse(plugin.isTrackingSuppressed());
+		Assert.assertTrue("Leaving a special world must re-baseline", plugin.isNeedsRebaseline());
+	}
+
+	@Test
+	public void unsupportedWorld_latchesWithoutBaseline()
+	{
+		// Regression: a hop lands on a special world with the snapshot still
+		// uninitialized (login re-baseline pending). Suppressed container
+		// events re-baseline without setting snapshotInitialized, so the
+		// world check must run before the finalizePendingPickups bail or the
+		// pause latch stays unreachable for the entire stay.
+		plugin.snapshotInitialized = false;
+
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS, WorldType.DEADMAN));
+		when(client.getTickCount()).thenReturn(100);
+		plugin.onGameTick(new GameTick());
+		Assert.assertTrue("Pause latch must engage even with no baseline",
+			plugin.wasUnsupportedWorld);
+
+		// The session clock must not advance while paused
+		java.time.Duration before = plugin.session.getTotalInGameTime();
+		when(client.getTickCount()).thenReturn(101);
+		plugin.onGameTick(new GameTick());
+		Assert.assertEquals(before, plugin.session.getTotalInGameTime());
+
+		// Return to a normal world: resume path re-arms the login re-baseline
+		when(client.getWorldType()).thenReturn(EnumSet.of(WorldType.MEMBERS));
+		when(client.getTickCount()).thenReturn(102);
+		plugin.onGameTick(new GameTick());
+		Assert.assertFalse(plugin.wasUnsupportedWorld);
+		Assert.assertTrue(plugin.isNeedsRebaseline());
 	}
 
 	@Test
@@ -8014,6 +8147,130 @@ public class CoinFlowPluginEventTest
 		// Should notify because gross profit 12k >= goal 10k, even though net is only 7k
 		Assert.assertTrue("Goal completed notified flag should be set", plugin.goalCompletedNotified);
 		org.mockito.Mockito.verify(notifier).notify(org.mockito.ArgumentMatchers.contains("Gross Goal"));
+	}
+
+	// ── Open/Loot pack intents (opened-item expensing) ───────────────────
+
+	private void clickOpen(int itemId, String target, net.runelite.api.MenuAction action)
+	{
+		net.runelite.api.MenuEntry entry = mock(net.runelite.api.MenuEntry.class);
+		when(entry.getOption()).thenReturn("Open");
+		when(entry.getTarget()).thenReturn("<col=ff9040>" + target + "</col>");
+		when(entry.getType()).thenReturn(action);
+		when(entry.getItemId()).thenReturn(itemId);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(entry));
+	}
+
+	@Test
+	public void openPack_expensesItemAtMarketPrice()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV))); // casket consumed, loot lands later
+
+		Assert.assertEquals(1_000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(-1_000L, plugin.session.getTotalProfit());
+		Assert.assertNull("Opened packs must not enter drop bookkeeping",
+			plugin.recentlyDroppedOwnedItems.get(casketId));
+		Assert.assertTrue("Intent consumed once the loss is seen", plugin.recentOpenIntents.isEmpty());
+	}
+
+	@Test
+	public void openPack_lootBooksAgainstCost()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		int lootId = ItemID.MITHRIL_PLATEBODY;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+		stubTrackableItem(lootId, "Mithril platebody", 3_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, lootId, 1)));
+
+		Assert.assertEquals(1_000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(2_000L, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void openOnObject_doesNotMintIntent()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		// "Open" on a world object (STASH unit, chest) — no inventory intent.
+		clickOpen(0, "Chest", net.runelite.api.MenuAction.GAME_OBJECT_FIRST_OPTION);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
+	}
+
+	@Test
+	public void openOnContainer_rebaselinesWithoutOpenIntent()
+	{
+		int gemBagId = ItemID.GEM_BAG;
+		stubTrackableItem(gemBagId, "Gem bag", 0L);
+
+		clickOpen(gemBagId, "Gem bag", net.runelite.api.MenuAction.CC_OP);
+
+		Assert.assertTrue(plugin.isNeedsRebaseline());
+		Assert.assertTrue(plugin.recentOpenIntents.isEmpty());
+	}
+
+	@Test
+	public void openPack_boughtItem_chargesCarriedBasis()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		// Bought earlier this session for 800 — the market price (1000) must
+		// not be charged; the carried purchase basis is.
+		plugin.grandExchangeTracker.addBasis(casketId, 1, 800L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(800L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.grandExchangeTracker.basisQuantity(casketId));
+	}
+
+	@Test
+	public void openPack_staleIntent_doesNotExpense()
+	{
+		int casketId = ItemID.TRAIL_CLUE_EASY_MAP001_CASKET;
+		stubTrackableItem(casketId, "Reward casket (easy)", 1_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, casketId, 1)));
+
+		when(client.getTickCount()).thenReturn(10);
+		clickOpen(casketId, "Reward casket (easy)", net.runelite.api.MenuAction.CC_OP);
+
+		// The click did not consume the item; it leaves 5 ticks later with no
+		// live intent — a plain loss, not a pack open.
+		when(client.getTickCount()).thenReturn(15);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
 	}
 }
 

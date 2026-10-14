@@ -60,6 +60,44 @@ final class GameTickProcessor
 
 		plugin.updateSuppressedRegion();
 
+		// Unsupported worlds pause tracking entirely — Leagues/DMM time must
+		// not dilute the main session's GP/hr. This latch runs before the
+		// snapshot gate below: on an unsupported world no baseline is ever
+		// taken (suppressed container events re-baseline without setting
+		// snapshotInitialized), so a check placed after finalizePendingPickups
+		// would be unreachable for the entire stay. On leaving, resume like a
+		// relog (the paused gap never counts) and re-baseline the inventory.
+		boolean unsupportedWorld = plugin.isUnsupportedWorld();
+		if (unsupportedWorld)
+		{
+			if (!plugin.wasUnsupportedWorld)
+			{
+				// Pause transitions get no session event, so ping the panel
+				// once to flip the "Paused" status on/off.
+				if (plugin.panel != null && plugin.session != null)
+				{
+					plugin.panel.updateSession(plugin.session);
+				}
+				log.debug("Unsupported world ({}), pausing tracking",
+					plugin.client.getWorldType());
+			}
+			plugin.wasUnsupportedWorld = true;
+		}
+		else if (plugin.wasUnsupportedWorld)
+		{
+			plugin.wasUnsupportedWorld = false;
+			if (plugin.session != null)
+			{
+				plugin.session = plugin.session.withResumedState();
+			}
+			plugin.interfaceTracker.setNeedsRebaseline(true);
+			if (plugin.panel != null && plugin.session != null)
+			{
+				plugin.panel.updateSession(plugin.session);
+			}
+			log.debug("Left unsupported world, resuming session");
+		}
+
 		if (!plugin.containerPickupTracker.finalizePendingPickups())
 		{
 			return;
@@ -172,18 +210,21 @@ final class GameTickProcessor
 		}
 
 		// Update idle state and time tracking on each tick
-		CoinFlowSession prevSession = plugin.session;
-		plugin.session = plugin.session.tick(plugin.config.idleTimeoutMinutes(), plugin.isPlayerActive());
-
-		// Periodic session telemetry (~every 30s) for debugging GP/hr and timer behavior.
-		// tickDelta should hover ~600ms; sustained near-0 values indicate clock corruption.
-		if (log.isDebugEnabled() && plugin.client != null && plugin.client.getTickCount() % 50 == 0)
+		if (!unsupportedWorld)
 		{
-			log.debug("Session: tickDelta={}ms active={}s total={}s gross={} spent={} gp/hr={} idle={}",
-				plugin.session.getTotalInGameTime().minus(prevSession.getTotalInGameTime()).toMillis(),
-				plugin.session.getActiveTime().getSeconds(), plugin.session.getTotalInGameTime().getSeconds(),
-				plugin.session.getGrossProfit(), plugin.session.getTotalExpenses(),
-				plugin.session.getGpPerHour(plugin.config.includeAfkTime()), plugin.session.isIdle());
+			CoinFlowSession prevSession = plugin.session;
+			plugin.session = plugin.session.tick(plugin.config.idleTimeoutMinutes(), plugin.isPlayerActive());
+
+			// Periodic session telemetry (~every 30s) for debugging GP/hr and timer behavior.
+			// tickDelta should hover ~600ms; sustained near-0 values indicate clock corruption.
+			if (log.isDebugEnabled() && plugin.client != null && plugin.client.getTickCount() % 50 == 0)
+			{
+				log.debug("Session: tickDelta={}ms active={}s total={}s gross={} spent={} gp/hr={} idle={}",
+					plugin.session.getTotalInGameTime().minus(prevSession.getTotalInGameTime()).toMillis(),
+					plugin.session.getActiveTime().getSeconds(), plugin.session.getTotalInGameTime().getSeconds(),
+					plugin.session.getGrossProfit(), plugin.session.getTotalExpenses(),
+					plugin.session.getGpPerHour(plugin.config.includeAfkTime()), plugin.session.isIdle());
+			}
 		}
 
 		// Evict dropped item records older than 600 ticks (~6 minutes) to prevent memory leak and stale pickup matching

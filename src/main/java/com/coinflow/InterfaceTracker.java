@@ -86,6 +86,16 @@ public class InterfaceTracker
 		InterfaceID.II_ELNOCK_STORAGE_SIDE,
 		InterfaceID.FORESTRY_KIT_MAIN,
 		InterfaceID.FORESTRY_KIT_SIDE,
+		// Sailing cargo holds: deposits are a storage transfer, not
+		// consumption; withdrawals must not book as loot.
+		// NOTE: per-boat cargo view groups (SAILING_BOAT_1..5_CARGOHOLD) only
+		// exist in API builds newer than runelite-api 1.13.1 — add them here
+		// once the pinned version ships them.
+		InterfaceID.SAILING_BOAT_CARGOHOLD,
+		InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE,
+		// Tool leprechaun farming-supplies storage (compost, buckets, etc.)
+		InterfaceID.FARMING_TOOLS,
+		InterfaceID.FARMING_TOOLS_SIDE,
 
 		// PvP Loot Chests
 		InterfaceID.WILDY_LOOT_CHEST,
@@ -182,7 +192,9 @@ public class InterfaceTracker
 		InterfaceID.POH_COSTUMES_SIDE,
 		InterfaceID.TACKLE_BOX_SIDE,
 		InterfaceID.II_ELNOCK_STORAGE_SIDE,
-		InterfaceID.FORESTRY_KIT_SIDE
+		InterfaceID.FORESTRY_KIT_SIDE,
+		InterfaceID.SAILING_BOAT_CARGOHOLD_SIDE,
+		InterfaceID.FARMING_TOOLS_SIDE
 	)));
 
 	@Getter
