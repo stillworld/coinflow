@@ -4,7 +4,7 @@ Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inv
 
 <br>
 
-![overlay example](<Screenshot 2026-09-30 at 5.00.43 PM.png>)
+![overlay example](screenshots/overlay.png)
 
 ## Features
 
@@ -42,7 +42,7 @@ You can configure Coin Flow in the standard RuneLite plugin settings:
 
 <br>
 
-![side panel example](<Screenshot 2026-09-30 at 5.10.08 PM-1.png>)
+![side panel example](screenshots/panel.png)
 
 ## Feedback & Bug Reports
 
