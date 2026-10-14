@@ -15,7 +15,7 @@ Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inv
 - **Goal Mode:** Set a target GP goal (e.g. `10m`, `Bond`) with a progress bar and real-time ETA based on your current rate.
 - **Interface Aware:** Automatically pauses while the bank, Grand Exchange, trade screens, or storage interfaces are open, so banking and hauling never distort your stats.
 
-## Deep Tracking
+## Robust Tracking
 
 Coin Flow understands the mechanics behind the numbers; it doesn't just watch your inventory count:
 
