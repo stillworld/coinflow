@@ -1,21 +1,35 @@
-# Coin Flow (Beta)
+# Coin Flow
 
-Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inventory and equipment changes tick-by-tick to calculate what you're actually making in real time whether you're bossing, doing slayer, skilling, or running clues.
-
-> **Note:** Coin Flow is currently in **beta**. While core tracking and common activities are well tested, you might occasionally run into edge cases with specific items, shops, or minigames. If something doesn't look right, please open an issue!
+Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inventory and equipment changes tick-by-tick to calculate what you're actually making in real time, whether you're bossing, doing slayer, skilling, sailing, or running clues.
 
 <br>
 
-![overlay example](<Screenshot 2026-09-30 at 5.00.43 PM.png>)
+![overlay example](<Screenshot 2026-09-30 at 5.00.43 PM.png>)
 
 ## Features
 
 - **Live Overlay & GP/hr:** Lightweight on-screen display showing your net profit, current GP/hr, session timer, and goal progress. Switch to a minimal single-line `gp/hr` style with an optional transparent background for an out-of-the-way display.
-- **Net Profit & Supply Tracking:** Optionally tracks consumed supplies (food bites, potion doses, ammo, runes, etc.) so you see actual profit rather than just raw loot value.
+- **Net Profit Tracking:** Optionally deducts the cost of supplies you use (food bites, potion doses, ammo, runes, teleports, and jewelry that crumbles on its last charge) so you see real profit, not just raw loot value.
 - **Floating Gold Drops:** Floating "+GP" drops (like XP drops) when you get loot or make money. Can appear overhead or in the top-right corner.
-- **Sidebar Panel:** Side panel showing your session breakdown, per-item gains and losses with current GE prices, and a quick reset button.
+- **Sidebar Panel:** Session breakdown with per-item gains and losses at current GE prices, plus a quick reset button.
 - **Goal Mode:** Set a target GP goal (e.g. `10m`, `Bond`) with a progress bar and real-time ETA based on your current rate.
-- **Interface Aware:** Automatically pauses tracking when you open the bank, Grand Exchange, shops, or trade screens so banking doesn't mess up your stats.
+- **Interface Aware:** Automatically pauses while the bank, Grand Exchange, trade screens, or storage interfaces are open, so banking and hauling never distort your stats.
+
+## Deep Tracking
+
+Coin Flow understands the mechanics behind the numbers; it doesn't just watch your inventory count:
+
+- **Grand Exchange:** Reads your actual offer fills instead of guessing from inventory changes, deducts the GE tax, and remembers what you paid. Items bought this session sell against their real purchase price, and supplies you use are charged at what they cost you.
+- **Shops:** Handles normal coin shops, points and reward shops, and NPC purchases made through dialogue (like Zaff's staffs) with the right rules for each.
+- **Charged Weapons & Ammo:** Tridents, blowpipe, scythe, bowfa, wildy weapons and more. Charge consumption is detected from your attacks and the weapon's charge counter, then counted as supply cost.
+- **Dwarf Multicannon:** Knows the difference between setting up your cannon and losing it. Parts, loaded cannonballs, pickup, and free replacements from Nulodion are all handled, so a cannon trip doesn't show fake profit or losses.
+- **Skilling:** Counts materials used as a cost and the finished products as profit for smithing (including cannonballs), fletching, crafting, cooking, herblore, and more, so a training session shows its true margin.
+- **Deaths:** Items lost on death are counted as a loss, reclaim fees are detected (including ironman discounts), and getting your items back from a gravestone or Death's Office cancels the loss instead of counting them as fresh loot.
+- **Storage & Containers:** Banks, seed vaults, looting bags, gem bags, herb sacks, seed boxes, tackle boxes, fish barrels, log baskets, rune pouches, tool leprechauns, and ship cargo holds all work correctly. Deposits and withdrawals don't count as losses or loot.
+- **Clue Caskets, Implings & Crates:** Opening a pack counts the pack itself as a cost. If you bought it this session you're charged what you paid; otherwise it uses the current market price.
+- **Minigame Safe:** Items that only exist inside minigames (Castle Wars, Soul Wars, Barbarian Assault, Guardians of the Rift, Nightmare Zone, Tempoross, Last Man Standing, the Gauntlet, and more) are ignored, so a game can't show phantom profit or losses.
+- **Special Worlds:** Tracking automatically pauses on Leagues, Deadman Mode, Beta, and Tournament worlds. Time spent there never skews your regular GP/hr.
+- **Account Isolation:** The session resets automatically when you log into a different account, so one character's loot can't bleed into another's.
 
 ## Configuration
 
@@ -26,9 +40,9 @@ You can configure Coin Flow in the standard RuneLite plugin settings:
 - **Ignored Items:** Add comma-separated items you don't want tracked (e.g. `Vial, Jug, Bones`).
 - **AFK / Idle:** Configure how idle time affects your calculated GP/hr.
 
-<br> 
+<br>
 
-![side panel example](<Screenshot 2026-09-30 at 5.10.08 PM-1.png>)
+![side panel example](<Screenshot 2026-09-30 at 5.10.08 PM-1.png>)
 
 ## Feedback & Bug Reports
 
