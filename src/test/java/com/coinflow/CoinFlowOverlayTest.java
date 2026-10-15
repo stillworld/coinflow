@@ -48,6 +48,36 @@ public class CoinFlowOverlayTest
 	}
 
 	@Test
+	public void constructor_registersConfigureSummaryAndResetMenuEntries()
+	{
+		java.util.List<net.runelite.client.ui.overlay.OverlayMenuEntry> entries = overlay.getMenuEntries();
+
+		boolean hasConfigure = false;
+		boolean hasSummary = false;
+		boolean hasReset = false;
+		for (net.runelite.client.ui.overlay.OverlayMenuEntry e : entries)
+		{
+			if (e.getMenuAction() == net.runelite.api.MenuAction.RUNELITE_OVERLAY_CONFIG && "Configure".equals(e.getOption()))
+			{
+				hasConfigure = true;
+			}
+			if (e.getMenuAction() == net.runelite.api.MenuAction.RUNELITE_OVERLAY && CoinFlowOverlay.MENU_VIEW_SUMMARY.equals(e.getOption()))
+			{
+				hasSummary = true;
+			}
+			if (e.getMenuAction() == net.runelite.api.MenuAction.RUNELITE_OVERLAY && CoinFlowOverlay.MENU_RESET.equals(e.getOption()))
+			{
+				hasReset = true;
+			}
+		}
+
+		Assert.assertTrue("Overlay must offer a Configure entry", hasConfigure);
+		Assert.assertTrue("Overlay must offer a View Summary entry", hasSummary);
+		Assert.assertTrue("Overlay must offer a Reset entry", hasReset);
+		Assert.assertEquals(3, entries.size());
+	}
+
+	@Test
 	public void render_hiddenWhenShowOverlayFalse()
 	{
 		when(config.showOverlay()).thenReturn(false);

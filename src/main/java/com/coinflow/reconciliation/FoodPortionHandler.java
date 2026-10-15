@@ -92,9 +92,12 @@ public class FoodPortionHandler implements ReconciliationHandler
 				long expenseTotal = basisCost
 					+ (long) Math.max(0, portions - basisPortions) * portionPrice;
 				String expenseName = lostName + " (portion)";
-				context.addFractionalSupplyExpense(canonicalLostId,
-					new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions,
-						expenseTotal / portions));
+				if (!context.isIgnored(lostName) && !context.isIgnored(expenseName))
+				{
+					context.addFractionalSupplyExpense(canonicalLostId,
+						new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions,
+							expenseTotal / portions));
+				}
 			}
 		}
 	}

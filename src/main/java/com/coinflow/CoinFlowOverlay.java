@@ -21,6 +21,10 @@ import net.runelite.client.util.QuantityFormatter;
 
 public class CoinFlowOverlay extends OverlayPanel
 {
+	static final String OVERLAY_TARGET = "Coin Flow overlay";
+	static final String MENU_VIEW_SUMMARY = "View Summary";
+	static final String MENU_RESET = "Reset";
+
 	private static final Color TITLE_COLOR = new Color(0xFF, 0xD7, 0x00); // Gold
 	private static final Color PROFIT_COLOR = new Color(0x00, 0xFF, 0x80); // Green
 	private static final Color LABEL_COLOR = Color.WHITE;
@@ -53,7 +57,9 @@ public class CoinFlowOverlay extends OverlayPanel
 		setPosition(OverlayPosition.TOP_LEFT);
 		setPriority(PRIORITY_LOW);
 		panelComponent.setPreferredSize(new Dimension(MIN_PANEL_WIDTH, 0));
-		getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY_CONFIG, "Configure", "Coin Flow overlay"));
+		getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY_CONFIG, "Configure", OVERLAY_TARGET));
+		getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY, MENU_VIEW_SUMMARY, OVERLAY_TARGET));
+		getMenuEntries().add(new OverlayMenuEntry(MenuAction.RUNELITE_OVERLAY, MENU_RESET, OVERLAY_TARGET));
 	}
 
 	@Override

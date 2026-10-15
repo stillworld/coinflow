@@ -22,6 +22,7 @@ public class InventoryReconciliationEngine
 		this.handlers = Collections.unmodifiableList(Arrays.asList(
 			new GearSwapHandler(),
 			new DroppedItemPickupHandler(),
+			new BlastFurnaceHandler(),
 			new ItemNotingHandler(),
 			new HighAlchemyHandler(),
 			new PotionDoseHandler(),

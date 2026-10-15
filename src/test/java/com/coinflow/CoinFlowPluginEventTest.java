@@ -8272,6 +8272,181 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
 		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
 	}
+
+	// ── Overlay right-click menu & item-row session actions ─────────────
+
+	@Test
+	public void overlayMenuReset_resetsSessionInstantly()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+		Assert.assertEquals(1_500L, plugin.getSession().getGrossProfit());
+
+		net.runelite.client.ui.overlay.OverlayMenuEntry entry = new net.runelite.client.ui.overlay.OverlayMenuEntry(
+			net.runelite.api.MenuAction.RUNELITE_OVERLAY, CoinFlowOverlay.MENU_RESET, CoinFlowOverlay.OVERLAY_TARGET);
+		plugin.onOverlayMenuClicked(new net.runelite.client.events.OverlayMenuClicked(entry, overlay));
+
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertTrue(plugin.getSession().getTrackedItems().isEmpty());
+	}
+
+	@Test
+	public void overlayMenuViewSummary_opensSessionSummaryWhenPanelPresent()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+		java.util.concurrent.atomic.AtomicBoolean opened = new java.util.concurrent.atomic.AtomicBoolean(false);
+		plugin.panel = new CoinFlowPanel(plugin, config, configManager, itemManager)
+		{
+			@Override
+			void openSessionSummary(CoinFlowSession s)
+			{
+				opened.set(true);
+			}
+		};
+
+		net.runelite.client.ui.overlay.OverlayMenuEntry entry = new net.runelite.client.ui.overlay.OverlayMenuEntry(
+			net.runelite.api.MenuAction.RUNELITE_OVERLAY, CoinFlowOverlay.MENU_VIEW_SUMMARY, CoinFlowOverlay.OVERLAY_TARGET);
+		plugin.onOverlayMenuClicked(new net.runelite.client.events.OverlayMenuClicked(entry, overlay));
+
+		Assert.assertTrue("View Summary must open the session summary dialog", opened.get());
+	}
+
+	@Test
+	public void overlayMenuClicked_ignoresConfigureAction()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+
+		// RUNELITE_OVERLAY_CONFIG is consumed by the client itself — even a
+		// spoofed "Reset" option on that action must not trigger a reset.
+		net.runelite.client.ui.overlay.OverlayMenuEntry entry = new net.runelite.client.ui.overlay.OverlayMenuEntry(
+			net.runelite.api.MenuAction.RUNELITE_OVERLAY_CONFIG, CoinFlowOverlay.MENU_RESET, CoinFlowOverlay.OVERLAY_TARGET);
+		plugin.onOverlayMenuClicked(new net.runelite.client.events.OverlayMenuClicked(entry, overlay));
+
+		Assert.assertEquals(1_500L, plugin.getSession().getGrossProfit());
+	}
+
+	@Test
+	public void overlayMenuClicked_ignoresForeignOverlay()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+
+		net.runelite.client.ui.overlay.OverlayMenuEntry entry = new net.runelite.client.ui.overlay.OverlayMenuEntry(
+			net.runelite.api.MenuAction.RUNELITE_OVERLAY, CoinFlowOverlay.MENU_RESET, CoinFlowOverlay.OVERLAY_TARGET);
+		plugin.onOverlayMenuClicked(new net.runelite.client.events.OverlayMenuClicked(entry, goldDropOverlay));
+
+		Assert.assertEquals(1_500L, plugin.getSession().getGrossProfit());
+	}
+
+	@Test
+	public void removeSessionItem_expenseOnly_leavesGainRow()
+	{
+		plugin.session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Shark", 10, 1_000L))
+			.withExpenses(gains(1, "Shark", 3, 1_000L));
+
+		plugin.removeSessionItem(1, true);
+
+		Assert.assertTrue(plugin.getSession().getTrackedExpenses().isEmpty());
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(10_000L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(10_000L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void removeSessionItem_clearsPendingDropLedgers()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+		plugin.recentlyDroppedItems.put(1, 3);
+		plugin.recentlyDroppedOwnedItems.put(1, 1);
+		plugin.recentlyExpensedDrops.put(1, 2);
+
+		plugin.removeSessionItem(1, false);
+
+		Assert.assertFalse(plugin.recentlyDroppedItems.containsKey(1));
+		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(1));
+		Assert.assertFalse(plugin.recentlyExpensedDrops.containsKey(1));
+	}
+
+	@Test
+	public void removeSessionItem_reArmsGoalNotification()
+	{
+		when(config.goalAmount()).thenReturn("100");
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 15L));
+		plugin.goalCompletedNotified = true;
+
+		plugin.removeSessionItem(1, false);
+
+		Assert.assertFalse("Profit below the goal must re-arm the completion notification",
+			plugin.goalCompletedNotified);
+	}
+
+	@Test
+	public void ignoreItem_appendsConfigAndRemovesSessionRows()
+	{
+		java.util.concurrent.atomic.AtomicReference<String> ignored =
+			new java.util.concurrent.atomic.AtomicReference<>("");
+		when(config.ignoredItems()).thenAnswer(inv -> ignored.get());
+		doAnswer(inv -> {
+			ignored.set((String) inv.getArgument(2));
+			return null;
+		}).when(configManager).setConfiguration(
+			org.mockito.ArgumentMatchers.eq(CoinFlowConfig.CONFIG_GROUP),
+			org.mockito.ArgumentMatchers.eq("ignoredItems"),
+			anyString());
+
+		plugin.session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L))
+			.withExpenses(gains(1, "Coal", 2, 150L));
+
+		plugin.ignoreItem(1, "Coal");
+
+		Assert.assertEquals("Coal", ignored.get());
+		Assert.assertTrue(plugin.ignoredItemNames.contains("coal"));
+		Assert.assertTrue(plugin.getSession().getTrackedItems().isEmpty());
+		Assert.assertTrue(plugin.getSession().getTrackedExpenses().isEmpty());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void ignoreItem_doseRow_normalizesToBaseName()
+	{
+		java.util.concurrent.atomic.AtomicReference<String> ignored =
+			new java.util.concurrent.atomic.AtomicReference<>("");
+		when(config.ignoredItems()).thenAnswer(inv -> ignored.get());
+		doAnswer(inv -> {
+			ignored.set((String) inv.getArgument(2));
+			return null;
+		}).when(configManager).setConfiguration(
+			org.mockito.ArgumentMatchers.eq(CoinFlowConfig.CONFIG_GROUP),
+			org.mockito.ArgumentMatchers.eq("ignoredItems"),
+			anyString());
+
+		int prayerPotionId = 2434;
+		plugin.session = CoinFlowSession.createNew()
+			.withExpenses(gains(prayerPotionId, "Prayer potion (dose)", 3, 2_500L));
+
+		plugin.ignoreItem(prayerPotionId, "Prayer potion (dose)");
+
+		Assert.assertEquals("Fractional expense rows must persist their base item name",
+			"Prayer potion", ignored.get());
+		Assert.assertTrue(plugin.ignoredItemNames.contains("prayer potion"));
+		Assert.assertTrue(plugin.getSession().getTrackedExpenses().isEmpty());
+	}
+
+	@Test
+	public void ignoreItem_alreadyListed_doesNotRewriteConfig()
+	{
+		when(config.ignoredItems()).thenReturn("Coal, Vial");
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Coal", 10, 150L));
+
+		plugin.ignoreItem(1, "coal");
+
+		verify(configManager, never()).setConfiguration(
+			org.mockito.ArgumentMatchers.eq(CoinFlowConfig.CONFIG_GROUP),
+			org.mockito.ArgumentMatchers.eq("ignoredItems"),
+			anyString());
+		// Session removal still happens even when the config already lists it.
+		Assert.assertTrue(plugin.getSession().getTrackedItems().isEmpty());
+	}
 }
 
 

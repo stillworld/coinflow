@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import com.coinflow.reconciliation.BlastFurnaceHandler;
 import com.coinflow.reconciliation.ProcessingPatternRegistry;
 import com.coinflow.reconciliation.ReconciliationContext;
 import java.util.Collections;
@@ -454,6 +455,16 @@ final class InventoryDiffProcessor
 					plugin.grandExchangeTracker.transferSetExchangeBasis(rawLosses, rawGains,
 						plugin.itemManager, plugin.client != null ? plugin.client.getTickCount() : 0);
 				}
+				// Blast Furnace bar collection landing inside a re-baseline
+				// window (e.g. a coal-bag Open/Close toggle) is still real
+				// output — rescue gains matching a recent dispenser varbit
+				// decrease. Bank-chest bar withdrawals produce no dispenser
+				// decrease and are never rescued.
+				if (plugin.blastFurnaceTracker.isActive() && rawLosses.isEmpty())
+				{
+					plugin.blastFurnaceTracker.rescueBars(rawGains,
+						plugin.client != null ? plugin.client.getTickCount() : 0);
+				}
 				// An omnishop purchase packet can land one tick after the
 				// interface closed — inside this re-baseline window. Credit
 				// those gains rather than swallowing them as baseline noise.
@@ -547,6 +558,15 @@ final class InventoryDiffProcessor
 			Map<Integer, Long> cannonReversals = plugin.cannonTracker.netDiff(rawGains, rawLosses,
 				plugin.client != null ? plugin.client.getTickCount() : 0,
 				plugin.interfaceTracker.isShopOpen());
+
+			// Blast Furnace coffer: a coin-only diff is a deposit or a
+			// withdrawal, not a spend or income — hold it aside so the coffer
+			// varbit can attribute it next tick. Diffs containing anything
+			// besides coins are left alone (purchases keep their accounting).
+			plugin.blastFurnaceTracker.holdCoins(rawGains, rawLosses,
+				plugin.client != null ? plugin.client.getTickCount() : 0,
+				plugin.isDropIntentActive(ItemID.COINS,
+					plugin.client != null ? plugin.client.getTickCount() : 0));
 
 			// ── Dialogue purchase (Zaff, Ali Morrisane, etc.) ─────────────
 			// Coins were the only thing lost and non-coin items arrived in the
@@ -742,6 +762,7 @@ final class InventoryDiffProcessor
 				context.setNotingService(currentTick - plugin.lastNotingServiceTick <= 5);
 			}
 
+			context.setBlastFurnaceActive(plugin.blastFurnaceTracker.isActive());
 			plugin.reconciliationEngine.reconcile(context);
 
 			// Drain any remaining consumed equipped ammo/thrown weapons or crumbled
@@ -823,6 +844,23 @@ final class InventoryDiffProcessor
 		}
 
 		int varbitId = event.getVarbitId();
+		if (plugin.blastFurnaceTracker.isActive()
+			&& BlastFurnaceHandler.DISPENSER_VARBIT_TO_BAR.containsKey(varbitId)
+			&& !plugin.invalidVarbitIds.contains(varbitId))
+		{
+			try
+			{
+				int value = plugin.client.getVarbitValue(varbitId);
+				plugin.blastFurnaceTracker.onDispenserVarbit(varbitId, value, plugin.client.getTickCount());
+			}
+			catch (IndexOutOfBoundsException e)
+			{
+				if (plugin.invalidVarbitIds.add(varbitId))
+				{
+					log.debug("Ignoring untracked varbit {} (not varp-backed)", varbitId);
+				}
+			}
+		}
 		if (plugin.isRunePouchVarbit(varbitId))
 		{
 			ItemContainer invContainer = plugin.client.getItemContainer(InventoryID.INV);

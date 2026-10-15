@@ -14,7 +14,7 @@ public class CoinFlowInputFilter extends DocumentFilter
 	public static final String DIGITS_ONLY = "[^0-9]";
 	public static final String TARGET_GP = "[^0-9.,kKmMbB]";
 	public static final String GOAL_NAME = "[^a-zA-Z0-9 '()/\\-]";
-	public static final String IGNORED_ITEMS = "[^a-zA-Z0-9 ',()\\-]";
+	public static final String IGNORED_ITEMS = "[^a-zA-Z0-9 ',()/\\-+]";
 
 	private final String disallowedRegex;
 	private final int maxLength;

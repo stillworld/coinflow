@@ -29,6 +29,8 @@ import net.runelite.api.events.AccountHashChanged;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.AnimationChanged;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameObjectDespawned;
+import net.runelite.api.events.GameObjectSpawned;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.GrandExchangeOfferChanged;
@@ -339,9 +341,11 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	/**
-	 * Parsed set of ignored item names (lowercase) from config.
+	 * Parsed set of ignored item names (lowercase) from config. Rebuilt on the
+	 * Swing EDT when the item-row "Ignore" action writes the config, so the
+	 * reference must be safely published for client-thread diff processing.
 	 */
-	Set<String> ignoredItemNames;
+	volatile Set<String> ignoredItemNames;
 
 	/**
 	 * Items removed from equipment on recent ticks to subtract from inventory gains.
@@ -452,6 +456,7 @@ public class CoinFlowPlugin extends Plugin
 
 	final ContainerPickupTracker containerPickupTracker = new ContainerPickupTracker(this);
 	final CannonTracker cannonTracker = new CannonTracker(this);
+	final BlastFurnaceTracker blastFurnaceTracker = new BlastFurnaceTracker(this);
 	final DeathFlowCoordinator deathFlowCoordinator = new DeathFlowCoordinator(this);
 	final MenuIntentHandler menuIntentHandler = new MenuIntentHandler(this);
 	final ChatMessageHandler chatMessageHandler = new ChatMessageHandler(this);
@@ -481,6 +486,7 @@ public class CoinFlowPlugin extends Plugin
 		grandExchangeTracker.reset();
 		deathTracker.reset();
 		cannonTracker.reset();
+		blastFurnaceTracker.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -507,6 +513,10 @@ public class CoinFlowPlugin extends Plugin
 			{
 				takeBaseline();
 				grandExchangeTracker.seed(client.getGrandExchangeOffers());
+				// No spawn event fires for an already-loaded conveyor — one
+				// one-shot scene lookup covers enabling the plugin at the
+				// Blast Furnace.
+				blastFurnaceTracker.checkSceneForConveyor();
 			});
 		}
 	}
@@ -534,6 +544,7 @@ public class CoinFlowPlugin extends Plugin
 		grandExchangeTracker.reset();
 		deathTracker.reset();
 		cannonTracker.reset();
+		blastFurnaceTracker.reset();
 	}
 
 	@Provides
@@ -578,6 +589,24 @@ public class CoinFlowPlugin extends Plugin
 	public void onVarbitChanged(VarbitChanged event)
 	{
 		inventoryDiffProcessor.onVarbitChanged(event);
+	}
+
+	@Subscribe
+	public void onGameObjectSpawned(GameObjectSpawned event)
+	{
+		if (event.getGameObject() != null)
+		{
+			blastFurnaceTracker.onObjectSpawn(event.getGameObject().getId());
+		}
+	}
+
+	@Subscribe
+	public void onGameObjectDespawned(GameObjectDespawned event)
+	{
+		if (event.getGameObject() != null)
+		{
+			blastFurnaceTracker.onObjectDespawn(event.getGameObject().getId());
+		}
 	}
 
 	@Subscribe
@@ -842,6 +871,12 @@ public class CoinFlowPlugin extends Plugin
 	public void onConfigChanged(ConfigChanged event)
 	{
 		lifecycleManager.onConfigChanged(event);
+	}
+
+	@Subscribe
+	public void onOverlayMenuClicked(OverlayMenuClicked event)
+	{
+		lifecycleManager.onOverlayMenuClicked(event);
 	}
 
 	// ── Internal Logic ───────────────────────────────────────────────────
@@ -1307,6 +1342,24 @@ public class CoinFlowPlugin extends Plugin
 	public void resetSession()
 	{
 		lifecycleManager.resetSession();
+	}
+
+	/**
+	 * Removes a single tracked row (gain or expense) from the active session.
+	 * Invoked from the item-row context menu on the Swing EDT.
+	 */
+	void removeSessionItem(int itemId, boolean isExpense)
+	{
+		lifecycleManager.removeSessionItem(itemId, isExpense);
+	}
+
+	/**
+	 * Adds an item to the ignored-items list and removes it from the active
+	 * session. Invoked from the item-row context menu on the Swing EDT.
+	 */
+	void ignoreItem(int itemId, String itemName)
+	{
+		lifecycleManager.ignoreItem(itemId, itemName);
 	}
 
 	/**

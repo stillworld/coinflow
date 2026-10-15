@@ -753,4 +753,100 @@ public class CoinFlowSessionTest
 		Assert.assertEquals(10L, gain.getRemainingQuantity());
 		Assert.assertEquals(1_500L, gain.getRemainingValue());
 	}
+
+	// ── withoutItem (panel Remove from Session / Ignore actions) ────────
+
+	@Test
+	public void withoutItem_removesGainAndAdjustsGross()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L))
+			.withGains(gains(2, "Iron ore", 5, 200L));
+
+		CoinFlowSession after = session.withoutItem(1);
+
+		Assert.assertFalse(after.getTrackedItems().containsKey(1));
+		Assert.assertTrue(after.getTrackedItems().containsKey(2));
+		Assert.assertEquals(1_000L, after.getGrossProfit());
+		Assert.assertEquals(1_000L, after.getTotalProfit());
+	}
+
+	@Test
+	public void withoutItem_isExpense_removesOnlyExpenseRow()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Shark", 10, 1_000L))
+			.withExpenses(gains(1, "Shark", 3, 1_000L));
+
+		CoinFlowSession after = session.withoutItem(1, true);
+
+		Assert.assertTrue(after.getTrackedExpenses().isEmpty());
+		Assert.assertEquals(0L, after.getTotalExpenses());
+		// Removing the expense must not touch the matching gain row.
+		Assert.assertEquals(10L, after.getTrackedItems().get(1).getQuantity());
+		Assert.assertEquals(10_000L, after.getGrossProfit());
+		Assert.assertEquals(10_000L, after.getTotalProfit());
+	}
+
+	@Test
+	public void withoutItem_gain_removesOnlyGainRow()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Shark", 10, 1_000L))
+			.withExpenses(gains(1, "Shark", 3, 1_000L));
+
+		CoinFlowSession after = session.withoutItem(1, false);
+
+		Assert.assertTrue(after.getTrackedItems().isEmpty());
+		Assert.assertEquals(0L, after.getGrossProfit());
+		Assert.assertEquals(3_000L, after.getTotalExpenses());
+		Assert.assertEquals(-3_000L, after.getTotalProfit());
+	}
+
+	@Test
+	public void withoutItem_noFlag_removesFromBothLedgers()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Shark", 10, 1_000L))
+			.withExpenses(gains(1, "Shark", 3, 1_000L))
+			.withGains(gains(2, "Tuna", 5, 100L));
+
+		CoinFlowSession after = session.withoutItem(1);
+
+		Assert.assertTrue(after.getTrackedExpenses().isEmpty());
+		Assert.assertFalse(after.getTrackedItems().containsKey(1));
+		Assert.assertEquals(500L, after.getGrossProfit());
+		Assert.assertEquals(0L, after.getTotalExpenses());
+		Assert.assertEquals(500L, after.getTotalProfit());
+	}
+
+	@Test
+	public void withoutItem_absentItem_returnsSameInstance()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L));
+
+		Assert.assertSame(session, session.withoutItem(99));
+		Assert.assertSame(session, session.withoutItem(99, true));
+		Assert.assertSame(session, session.withoutItem(99, false));
+		// Present in gains but absent from expenses — expense removal is a no-op.
+		Assert.assertSame(session, session.withoutItem(1, true));
+	}
+
+	@Test
+	public void withoutItem_preservesTimersAndIdleState()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(1, "Coal", 10, 150L))
+			.tick(0); // tick(0) forces immediate idle
+		Assert.assertTrue(session.isIdle());
+
+		CoinFlowSession after = session.withoutItem(1);
+
+		Assert.assertEquals(session.getActiveTime(), after.getActiveTime());
+		Assert.assertEquals(session.getTotalInGameTime(), after.getTotalInGameTime());
+		Assert.assertEquals(session.getSessionStartTime(), after.getSessionStartTime());
+		Assert.assertEquals(session.isIdle(), after.isIdle());
+		Assert.assertEquals(session.getLastTickTime(), after.getLastTickTime());
+	}
 }

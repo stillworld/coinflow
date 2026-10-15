@@ -172,6 +172,16 @@ public class ReconciliationContext
 	@Setter
 	private boolean notingService = false;
 
+	/**
+	 * Whether the player is currently at the Blast Furnace (conveyor belt
+	 * object present in the scene). Set by {@code InventoryDiffProcessor}
+	 * from {@code BlastFurnaceTracker} before each reconcile so the
+	 * {@code BlastFurnaceHandler} can claim belt-load losses.
+	 */
+	@Getter
+	@Setter
+	private boolean blastFurnaceActive = false;
+
 	@Getter
 	private final Set<Skill> activeSkillingSkills = new java.util.HashSet<>();
 
@@ -345,11 +355,7 @@ public class ReconciliationContext
 
 	public boolean isIgnored(String itemName)
 	{
-		if (ignoredItemNames == null || ignoredItemNames.isEmpty() || itemName == null)
-		{
-			return false;
-		}
-		return ignoredItemNames.contains(itemName.toLowerCase());
+		return com.coinflow.ConsumableRegistry.isIgnoredName(itemName, ignoredItemNames);
 	}
 
 	public void addSupplyExpense(int itemId, CoinFlowSession.TrackedItem expenseItem)
@@ -416,6 +422,23 @@ public class ReconciliationContext
 		if (quantity > 0)
 		{
 			consumedSessionQuantities.merge(itemId, quantity, Long::sum);
+		}
+	}
+
+	/**
+	 * Retires matching session gains consumed in place so a later drop or sale
+	 * of identical pre-session stock cannot deduct them a second time.
+	 */
+	public void retireSessionGain(int itemId, long quantity)
+	{
+		if (session == null || quantity <= 0)
+		{
+			return;
+		}
+		CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
+		if (existingGain != null && existingGain.getRemainingQuantity() > 0)
+		{
+			markSessionGainConsumed(itemId, Math.min(quantity, existingGain.getRemainingQuantity()));
 		}
 	}
 }
