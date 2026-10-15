@@ -215,7 +215,7 @@ public class PotionDoseHandler implements ReconciliationHandler
 				basisDoses = (int) result[1];
 			}
 
-			// If doses were consumed, record supply expense
+			// If doses were consumed, record supply expense (unless the potion is ignored)
 			if (dosesConsumed > 0 && sampleCanonicalId != -1 && sampleDose > 0)
 			{
 				long potionPrice = itemManager.getItemPrice(sampleCanonicalId);
@@ -223,9 +223,12 @@ public class PotionDoseHandler implements ReconciliationHandler
 
 				long expenseTotal = basisCost + (long) Math.max(0, dosesConsumed - basisDoses) * dosePrice;
 				String expenseName = (sampleBaseName != null ? sampleBaseName : "Potion") + " (dose)";
-				context.addFractionalSupplyExpense(sampleCanonicalId,
-					new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed,
-						expenseTotal / dosesConsumed));
+				if (!context.isIgnored(sampleBaseName) && !context.isIgnored(expenseName))
+				{
+					context.addFractionalSupplyExpense(sampleCanonicalId,
+						new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed,
+							expenseTotal / dosesConsumed));
+				}
 			}
 
 			// Reconcile empty vials if vials were freed

@@ -479,6 +479,21 @@ public final class CoinFlowSession
 	}
 
 	/**
+	 * True for synthetic GP-denominated ledger rows that are not real
+	 * inventory items: "Death" ({@link DeathTracker#DEATH_ROW_ID}), "GE Tax"
+	 * ({@link GrandExchangeTax#TAX_ITEM_ID}) and "Blast Furnace coffer"
+	 * ({@link BlastFurnaceTracker#COFFER_ROW_ID}). Their backing ids (Skull,
+	 * coin piles) must never be offered to the ignored-items list, and the
+	 * rows carry gp as their quantity at price 1.
+	 */
+	public static boolean isSyntheticRowId(int itemId)
+	{
+		return itemId == DeathTracker.DEATH_ROW_ID
+			|| itemId == GrandExchangeTax.TAX_ITEM_ID
+			|| itemId == BlastFurnaceTracker.COFFER_ROW_ID;
+	}
+
+	/**
 	 * Returns a new session where the given item quantities are marked as consumed
 	 * in place (eaten, drunk, used). The credited gains stay on the ledger — they
 	 * are offset by the recorded expense — but those units can no longer be
@@ -648,6 +663,70 @@ public final class CoinFlowSession
 			Instant.now(),
 			this.lastTickTime,
 			false
+		);
+	}
+
+	/**
+	 * Returns a new session snapshot with the given item removed from both the
+	 * tracked gains and tracked expenses ledgers, subtracting its carried
+	 * values from grossProfit and totalExpenses. Used by the panel's
+	 * "Remove from Session" / "Ignore" actions on rows that may appear in
+	 * both ledgers (e.g. food: gained as loot, spent as portions).
+	 *
+	 * @param itemId canonical item id to remove
+	 * @return new session snapshot without the item, or this session when absent
+	 */
+	public CoinFlowSession withoutItem(int itemId)
+	{
+		return withoutItem(itemId, false).withoutItem(itemId, true);
+	}
+
+	/**
+	 * Returns a new session snapshot with the given item removed from either
+	 * the expense ledger ({@code isExpense == true}) or the gain ledger
+	 * ({@code isExpense == false}), subtracting its carried value from
+	 * totalExpenses or grossProfit respectively. Session timers and idle
+	 * state are preserved.
+	 *
+	 * @param itemId    canonical item id to remove
+	 * @param isExpense which ledger to remove the item from
+	 * @return new session snapshot without the item, or this session when absent
+	 */
+	public CoinFlowSession withoutItem(int itemId, boolean isExpense)
+	{
+		Map<Integer, TrackedItem> source = isExpense ? trackedExpenses : trackedItems;
+		TrackedItem removed = source.get(itemId);
+		if (removed == null)
+		{
+			return this;
+		}
+
+		Map<Integer, TrackedItem> updatedItems = isExpense ? trackedItems : new HashMap<>(trackedItems);
+		Map<Integer, TrackedItem> updatedExpenses = isExpense ? new HashMap<>(trackedExpenses) : trackedExpenses;
+		long newGrossProfit = grossProfit;
+		long newTotalExpenses = totalExpenses;
+		if (isExpense)
+		{
+			updatedExpenses.remove(itemId);
+			newTotalExpenses -= removed.getTotalValue();
+		}
+		else
+		{
+			updatedItems.remove(itemId);
+			newGrossProfit -= removed.getTotalValue();
+		}
+
+		return new CoinFlowSession(
+			updatedItems,
+			updatedExpenses,
+			newGrossProfit,
+			newTotalExpenses,
+			this.sessionStartTime,
+			this.activeTime,
+			this.totalInGameTime,
+			this.lastActivityTime,
+			this.lastTickTime,
+			this.idle
 		);
 	}
 

@@ -52,7 +52,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				long price = ItemPricing.priceOf(itemId, itemManager);
 				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
 				context.getRecentlyExpensedDrops().merge(itemId, quantity, Integer::sum);
-				retireSessionGain(context, session, itemId, quantity);
+				context.retireSessionGain(itemId, quantity);
 
 				log.debug("Dropped item expensed: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
@@ -68,7 +68,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 			{
 				long price = itemId == ItemID.PLATINUM ? 1000L : 1L;
 				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-				retireSessionGain(context, session, itemId, quantity);
+				context.retireSessionGain(itemId, quantity);
 				log.debug("Cash spend: {} x{} = {} gp", itemName, quantity, (long) quantity * price);
 				continue;
 			}
@@ -101,7 +101,7 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 
 				// Retire matching session gains so a later drop/sale of pre-session
 				// stock cannot deduct the already-consumed loot a second time.
-				retireSessionGain(context, session, itemId, quantity);
+				context.retireSessionGain(itemId, quantity);
 
 				log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
@@ -183,23 +183,6 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 		else
 		{
 			map.put(id, remaining);
-		}
-	}
-
-	/**
-	 * Retires matching session gains consumed in place so a later drop or sale
-	 * of identical pre-session stock cannot deduct them a second time.
-	 */
-	private static void retireSessionGain(ReconciliationContext context, CoinFlowSession session, int itemId, int quantity)
-	{
-		if (session == null)
-		{
-			return;
-		}
-		CoinFlowSession.TrackedItem existingGain = session.getTrackedItems().get(itemId);
-		if (existingGain != null && existingGain.getRemainingQuantity() > 0)
-		{
-			context.markSessionGainConsumed(itemId, Math.min(quantity, existingGain.getRemainingQuantity()));
 		}
 	}
 

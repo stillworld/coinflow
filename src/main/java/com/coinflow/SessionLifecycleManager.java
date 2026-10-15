@@ -6,10 +6,12 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.MenuAction;
 import net.runelite.api.Skill;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.events.OverlayMenuClicked;
 
 /**
  * Session lifecycle: login/logout transitions, baselining, session resets,
@@ -31,6 +33,7 @@ final class SessionLifecycleManager
 	{
 		GameState state = event.getGameState();
 		plugin.interfaceTracker.onGameStateChanged(state, plugin.snapshotInitialized);
+		plugin.blastFurnaceTracker.onGameStateChanged(state);
 
 		if (state == GameState.LOGGED_IN)
 		{
@@ -56,6 +59,10 @@ final class SessionLifecycleManager
 			// capture rather than risk mispricing the loss. The recovery
 			// ledger survives — reclaiming often happens after a relog.
 			plugin.deathTracker.discardPending();
+			// Charge any accrued coffer drain while the session is still
+			// alive, then drop the coffer baseline — the next read after
+			// relog only re-baselines.
+			plugin.blastFurnaceTracker.onLeftLoggedIn();
 			resetTransientTrackingState();
 		}
 	}
@@ -307,6 +314,9 @@ final class SessionLifecycleManager
 		// not: ball state on relog is unknown, so fewer reversals are safer
 		// than phantom ones.
 		plugin.cannonTracker.clearLoadedBalls();
+		// Held coffer coins and dispenser-rescue entries never survive a
+		// boundary — a held loss expiring after relog would book as spend.
+		plugin.blastFurnaceTracker.clearTransient();
 		plugin.rebaselineGraceTicks = 0;
 		plugin.minigameHudVisible = false;
 		plugin.minigameHudGraceTicks = 0;
@@ -344,6 +354,7 @@ final class SessionLifecycleManager
 		plugin.grandExchangeTracker.reset();
 		plugin.deathTracker.reset();
 		plugin.cannonTracker.reset();
+		plugin.blastFurnaceTracker.resetSession();
 		if (plugin.client != null && plugin.client.getGameState() == GameState.LOGGED_IN)
 		{
 			plugin.grandExchangeTracker.seed(plugin.client.getGrandExchangeOffers());
@@ -365,5 +376,149 @@ final class SessionLifecycleManager
 			plugin.panel.updateSession(plugin.session);
 		}
 		log.info("Coin Flow session reset");
+	}
+
+	/**
+	 * Removes a tracked row from the active session (a gain or an expense).
+	 * Called from the item-row context menu on the Swing EDT, so the session
+	 * mutation is marshalled onto the client thread like {@link #resetSession}.
+	 */
+	void removeSessionItem(int itemId, boolean isExpense)
+	{
+		if (plugin.clientThread != null && (plugin.client == null || !plugin.client.isClientThread()))
+		{
+			plugin.clientThread.invokeLater(() -> removeSessionItemOnClientThread(itemId, isExpense));
+			return;
+		}
+		removeSessionItemOnClientThread(itemId, isExpense);
+	}
+
+	/**
+	 * Removes a tracked row from both ledgers — used by "Ignore", where the
+	 * same item may appear as both loot and a supply expense.
+	 */
+	private void removeSessionItemCompletely(int itemId)
+	{
+		if (plugin.session == null)
+		{
+			return;
+		}
+		plugin.session = plugin.session.withoutItem(itemId);
+		afterSessionItemRemoval(itemId);
+	}
+
+	private void removeSessionItemOnClientThread(int itemId, boolean isExpense)
+	{
+		if (plugin.session == null)
+		{
+			return;
+		}
+		plugin.session = plugin.session.withoutItem(itemId, isExpense);
+		afterSessionItemRemoval(itemId);
+	}
+
+	/**
+	 * Post-removal bookkeeping: drop stale pending-drop ledgers for the item
+	 * (a pickup of a removed row must never reverse an expense or restore a
+	 * deduction that no longer exists), re-arm the goal notification if the
+	 * removal dropped profit below the target, and refresh the panel.
+	 */
+	private void afterSessionItemRemoval(int itemId)
+	{
+		plugin.recentlyDroppedItems.remove(itemId);
+		plugin.recentlyDroppedOwnedItems.remove(itemId);
+		plugin.recentlyExpensedDrops.remove(itemId);
+
+		long goalAmount = CoinFlowSession.parseGoalAmount(plugin.config != null ? plugin.config.goalAmount() : null);
+		if (goalAmount > 0 && plugin.session != null)
+		{
+			long currentProfit = (plugin.config != null && !plugin.config.trackSpent())
+				? plugin.session.getGrossProfit() : plugin.session.getTotalProfit();
+			if (currentProfit < goalAmount)
+			{
+				plugin.goalCompletedNotified = false;
+			}
+		}
+
+		if (plugin.panel != null)
+		{
+			plugin.panel.updateSession(plugin.session);
+		}
+	}
+
+	/**
+	 * Adds an item to the ignored-items config and removes it from the active
+	 * session. Fractional expense rows (" (dose)" / " (portion)") are
+	 * normalized to their base item name first so ignoring a dose row ignores
+	 * the underlying potion. Called from the item-row context menu on the
+	 * Swing EDT; config writes are EDT-safe, the session removal marshals to
+	 * the client thread.
+	 */
+	void ignoreItem(int itemId, String itemName)
+	{
+		String clean = ConsumableRegistry.canonicalIgnoreName(itemName)
+			.replaceAll(CoinFlowInputFilter.IGNORED_ITEMS, "").trim();
+		if (!clean.isEmpty() && plugin.configManager != null)
+		{
+			String existing = plugin.config != null ? plugin.config.ignoredItems() : null;
+			boolean alreadyListed = false;
+			if (existing != null && !existing.trim().isEmpty())
+			{
+				for (String name : existing.split(","))
+				{
+					if (name.trim().equalsIgnoreCase(clean))
+					{
+						alreadyListed = true;
+						break;
+					}
+				}
+			}
+			if (!alreadyListed)
+			{
+				String updated = (existing == null || existing.trim().isEmpty())
+					? clean
+					: existing.trim() + ", " + clean;
+				plugin.configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "ignoredItems", updated);
+				plugin.rebuildFilterSet();
+				log.debug("Added '{}' to ignored items", clean);
+			}
+		}
+
+		if (plugin.clientThread != null && (plugin.client == null || !plugin.client.isClientThread()))
+		{
+			plugin.clientThread.invokeLater(() -> removeSessionItemCompletely(itemId));
+		}
+		else
+		{
+			removeSessionItemCompletely(itemId);
+		}
+	}
+
+	/**
+	 * Handles right-click menu actions on the Coin Flow HUD overlay. Only
+	 * custom {@link MenuAction#RUNELITE_OVERLAY} entries are handled here —
+	 * RUNELITE_OVERLAY_CONFIG ("Configure") is consumed by the client itself,
+	 * which {@link CoinFlowPlugin#openConfiguration()} also relies on.
+	 */
+	void onOverlayMenuClicked(OverlayMenuClicked event)
+	{
+		if (plugin.overlay == null || event.getOverlay() != plugin.overlay || event.getEntry() == null
+			|| event.getEntry().getMenuAction() != MenuAction.RUNELITE_OVERLAY)
+		{
+			return;
+		}
+		String option = event.getEntry().getOption();
+		if (CoinFlowOverlay.MENU_RESET.equals(option))
+		{
+			resetSession();
+		}
+		else if (CoinFlowOverlay.MENU_VIEW_SUMMARY.equals(option))
+		{
+			CoinFlowSession session = plugin.session;
+			if (plugin.panel != null && session != null)
+			{
+				plugin.panel.openSessionSummary(session);
+			}
+		}
 	}
 }

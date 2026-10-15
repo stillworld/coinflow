@@ -21,6 +21,65 @@ public final class ConsumableRegistry
 {
 	private ConsumableRegistry() {}
 
+	/**
+	 * Suffixes used on fractional expense rows — "Prayer potion (dose)" is the
+	 * expense side of "Prayer potion(4)". Stripped when adding to the
+	 * ignored-items list so ignoring a dose/portion row ignores the underlying
+	 * item, and matched in {@link #isIgnoredName} so ignoring the base item
+	 * covers those rows.
+	 */
+	private static final String[] FRACTIONAL_SUFFIXES = {" (dose)", " (portion)"};
+
+	/**
+	 * Returns the item name used for the ignored-items filter: fractional
+	 * expense rows like "Prayer potion (dose)" and "Summer pie (portion)"
+	 * normalize to their base item name.
+	 */
+	public static String canonicalIgnoreName(String itemName)
+	{
+		if (itemName == null)
+		{
+			return "";
+		}
+		String name = itemName.trim();
+		String lower = name.toLowerCase(Locale.ROOT);
+		for (String suffix : FRACTIONAL_SUFFIXES)
+		{
+			if (lower.endsWith(suffix))
+			{
+				return name.substring(0, name.length() - suffix.length()).trim();
+			}
+		}
+		return name;
+	}
+
+	/**
+	 * Checks whether {@code itemName} is covered by the ignored-items set:
+	 * matches the name directly, the base name of a fractional expense row
+	 * (" (dose)" / " (portion)" suffixes), or a potion's base name (so
+	 * ignoring "Prayer potion" covers "Prayer potion(1)"-"(4)" and vice versa).
+	 * {@code ignoredItemNames} must contain lowercase names.
+	 */
+	public static boolean isIgnoredName(String itemName, Set<String> ignoredItemNames)
+	{
+		if (ignoredItemNames == null || ignoredItemNames.isEmpty() || itemName == null)
+		{
+			return false;
+		}
+		String lower = itemName.toLowerCase(Locale.ROOT);
+		if (ignoredItemNames.contains(lower))
+		{
+			return true;
+		}
+		String stripped = canonicalIgnoreName(itemName).toLowerCase(Locale.ROOT);
+		if (!stripped.equals(lower) && ignoredItemNames.contains(stripped))
+		{
+			return true;
+		}
+		PotionDose potion = parsePotion(itemName);
+		return potion != null && ignoredItemNames.contains(potion.getBaseName().toLowerCase(Locale.ROOT));
+	}
+
 	// Matches potion names like "Stamina potion(4)", "Prayer potion (3)", "Saradomin brew(1)"
 	private static final Pattern POTION_PATTERN = Pattern.compile("^(.*?)\\s*\\((\\d)\\)$");
 

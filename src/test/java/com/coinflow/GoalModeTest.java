@@ -312,4 +312,128 @@ public class GoalModeTest
 		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
 		panel.onConfigChanged();
 	}
+
+	@Test
+	public void testItemFilterBar_buttonsReflectCountsAndToggle()
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		org.mockito.Mockito.when(config.trackSpent()).thenReturn(true);
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+
+		javax.swing.JPanel bar = panel.buildItemFilterBar(4, 2);
+		Assert.assertEquals(3, bar.getComponentCount());
+
+		Assert.assertEquals(CoinFlowPanel.ItemFilter.ALL, panel.itemFilter);
+		((javax.swing.JButton) bar.getComponent(1)).doClick();
+		Assert.assertEquals(CoinFlowPanel.ItemFilter.LOOT, panel.itemFilter);
+		((javax.swing.JButton) bar.getComponent(2)).doClick();
+		Assert.assertEquals(CoinFlowPanel.ItemFilter.SPENT, panel.itemFilter);
+		((javax.swing.JButton) bar.getComponent(0)).doClick();
+		Assert.assertEquals(CoinFlowPanel.ItemFilter.ALL, panel.itemFilter);
+	}
+
+	@Test
+	public void testCreateItemPopupMenu_normalRow_hasIgnoreAndWiki()
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+
+		CoinFlowSession.TrackedItem coal = new CoinFlowSession.TrackedItem(453, "Coal", 10, 150L);
+		javax.swing.JPopupMenu menu = panel.createItemPopupMenu(coal, false);
+
+		boolean hasRemove = false, hasIgnore = false, hasWiki = false;
+		for (java.awt.Component c : menu.getComponents())
+		{
+			if (!(c instanceof javax.swing.JMenuItem))
+			{
+				continue;
+			}
+			String text = ((javax.swing.JMenuItem) c).getText();
+			if ("Remove from Session".equals(text)) hasRemove = true;
+			if ("Ignore Coal".equals(text)) hasIgnore = true;
+			if ("Open on OSRS Wiki".equals(text)) hasWiki = true;
+		}
+
+		Assert.assertTrue(hasRemove);
+		Assert.assertTrue(hasIgnore);
+		Assert.assertTrue(hasWiki);
+	}
+
+	@Test
+	public void testCreateItemPopupMenu_syntheticRow_omitsIgnore()
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+
+		// Death and GE Tax rows are synthetic accounting rows — offering
+		// "Ignore" on them would shadow real items sharing those ids.
+		CoinFlowSession.TrackedItem death = new CoinFlowSession.TrackedItem(
+			DeathTracker.DEATH_ROW_ID, "Death", 50_000L, 1L);
+		CoinFlowSession.TrackedItem tax = new CoinFlowSession.TrackedItem(
+			GrandExchangeTax.TAX_ITEM_ID, "GE Tax", 2_000L, 1L);
+		CoinFlowSession.TrackedItem coffer = new CoinFlowSession.TrackedItem(
+			BlastFurnaceTracker.COFFER_ROW_ID, BlastFurnaceTracker.COFFER_ROW_NAME, 1_200L, 1L);
+
+		Assert.assertTrue(CoinFlowPanel.isSyntheticRow(death));
+		Assert.assertTrue(CoinFlowPanel.isSyntheticRow(tax));
+		Assert.assertTrue(CoinFlowPanel.isSyntheticRow(coffer));
+		Assert.assertFalse(CoinFlowPanel.isSyntheticRow(new CoinFlowSession.TrackedItem(453, "Coal", 10, 150L)));
+
+		Assert.assertTrue("The coffer row links to the Blast Furnace wiki page",
+			CoinFlowPanel.wikiUrlForItem(coffer).contains("/w/Blast_Furnace"));
+
+		for (CoinFlowSession.TrackedItem synthetic : new CoinFlowSession.TrackedItem[]{death, tax, coffer})
+		{
+			javax.swing.JPopupMenu menu = panel.createItemPopupMenu(synthetic, true);
+			boolean hasIgnore = false;
+			for (java.awt.Component c : menu.getComponents())
+			{
+				if (c instanceof javax.swing.JMenuItem && ((javax.swing.JMenuItem) c).getText().startsWith("Ignore"))
+				{
+					hasIgnore = true;
+				}
+			}
+			Assert.assertFalse("Synthetic rows must not offer an Ignore action", hasIgnore);
+		}
+	}
+
+	@Test
+	public void testWikiUrlForItem_usesSpecialLookup()
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+
+		CoinFlowSession.TrackedItem coal = new CoinFlowSession.TrackedItem(453, "Coal", 10, 150L);
+		String url = CoinFlowPanel.wikiUrlForItem(coal);
+		Assert.assertTrue(url.contains("oldschool.runescape.wiki"));
+		Assert.assertTrue(url.contains("Special:Lookup"));
+		Assert.assertTrue(url.contains("id=453"));
+
+		// Dose/portion synthetic labels resolve through the base item name.
+		CoinFlowSession.TrackedItem dose = new CoinFlowSession.TrackedItem(
+			2434, "Prayer potion (dose)", 3, 2_500L);
+		String doseUrl = CoinFlowPanel.wikiUrlForItem(dose);
+		Assert.assertTrue(doseUrl.contains("id=2434") || doseUrl.contains("Prayer%20potion") || doseUrl.contains("Prayer+potion"));
+	}
 }

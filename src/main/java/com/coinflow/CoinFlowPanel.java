@@ -28,8 +28,10 @@ import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
@@ -51,6 +53,7 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
 import net.runelite.client.util.AsyncBufferedImage;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.client.util.LinkBrowser;
 import net.runelite.client.util.QuantityFormatter;
 import net.runelite.client.util.SwingUtil;
 
@@ -116,7 +119,18 @@ public class CoinFlowPanel extends PluginPanel
 	// ── Item Breakdown UI Components ─────────────────────────────────────
 	private final JPanel itemsCard = new JPanel();
 	private final JLabel itemsCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
-	private final JPanel itemsContainer = new JPanel();
+	final JPanel itemsContainer = new JPanel();
+
+	/**
+	 * Which rows the item breakdown card renders. Only meaningful when
+	 * {@code trackSpent} is on; kept as a field (not config) so the choice
+	 * doesn't churn persisted settings.
+	 */
+	enum ItemFilter
+	{
+		ALL, LOOT, SPENT
+	}
+	ItemFilter itemFilter = ItemFilter.ALL;
 
 	private boolean editingGoal = false;
 	private boolean lastHadActiveGoal = false;
@@ -820,7 +834,7 @@ public class CoinFlowPanel extends PluginPanel
 		}
 	}
 
-	private void refreshItemsCardView()
+	void refreshItemsCardView()
 	{
 		itemsCard.removeAll();
 		itemsCard.setLayout(new GridBagLayout());
@@ -891,10 +905,26 @@ public class CoinFlowPanel extends PluginPanel
 			itemsContainer.removeAll();
 			itemsContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-			if (totalItemCount == 0)
+			// Without spent tracking there are no expense rows to filter; force ALL.
+			ItemFilter filter = trackSpent ? itemFilter : ItemFilter.ALL;
+			boolean showLoot = filter != ItemFilter.SPENT;
+			boolean showSpent = filter != ItemFilter.LOOT && trackSpent;
+			int shownCount = (showLoot ? items.size() : 0) + (showSpent ? expenses.size() : 0);
+
+			if (trackSpent)
+			{
+				c.insets = new Insets(0, 0, compact ? 4 : 6, 0);
+				itemsCard.add(buildItemFilterBar(items.size(), expenses.size()), c);
+				c.gridy++;
+			}
+
+			if (shownCount == 0)
 			{
 				itemsContainer.setLayout(new BorderLayout());
-				JLabel emptyLabel = new JLabel("No items tracked this session", SwingConstants.CENTER);
+				String emptyText = filter == ItemFilter.LOOT ? "No loot tracked this session"
+					: filter == ItemFilter.SPENT ? "No expenses tracked this session"
+					: "No items tracked this session";
+				JLabel emptyLabel = new JLabel(emptyText, SwingConstants.CENTER);
 				emptyLabel.setFont(FontManager.getRunescapeSmallFont());
 				emptyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 				emptyLabel.setBorder(new EmptyBorder(compact ? 4 : 8, 0, compact ? 4 : 8, 0));
@@ -903,13 +933,19 @@ public class CoinFlowPanel extends PluginPanel
 			else
 			{
 				itemsContainer.setLayout(new DynamicGridLayout(0, 1, 0, compact ? 2 : 4));
-				for (CoinFlowSession.TrackedItem item : items)
+				if (showLoot)
 				{
-					itemsContainer.add(buildItemRow(item, compact, false));
+					for (CoinFlowSession.TrackedItem item : items)
+					{
+						itemsContainer.add(buildItemRow(item, compact, false));
+					}
 				}
-				for (CoinFlowSession.TrackedItem expense : expenses)
+				if (showSpent)
 				{
-					itemsContainer.add(buildItemRow(expense, compact, true));
+					for (CoinFlowSession.TrackedItem expense : expenses)
+					{
+						itemsContainer.add(buildItemRow(expense, compact, true));
+					}
 				}
 			}
 
@@ -938,9 +974,10 @@ public class CoinFlowPanel extends PluginPanel
 		iconLabel.setVerticalAlignment(SwingConstants.CENTER);
 		if (itemManager != null)
 		{
-			// Synthetic GP-denominated rows (Death) carry gp as their quantity;
-			// draw the icon once rather than painting a meaningless stack count.
-			boolean gpRow = item.getItemId() == DeathTracker.DEATH_ROW_ID;
+			// Synthetic GP-denominated rows (Death, GE Tax, Blast Furnace
+			// coffer) carry gp as their quantity; draw the icon once rather
+			// than painting a meaningless stack count.
+			boolean gpRow = CoinFlowSession.isSyntheticRowId(item.getItemId());
 			AsyncBufferedImage image = gpRow
 				? itemManager.getImage(item.getItemId())
 				: itemManager.getImage(item.getItemId(), (int) Math.min(Integer.MAX_VALUE, item.getQuantity()), item.getQuantity() > 1);
@@ -1027,7 +1064,96 @@ public class CoinFlowPanel extends PluginPanel
 		nameLabel.addMouseListener(hoverAdapter);
 		valueLabel.addMouseListener(hoverAdapter);
 
+		JPopupMenu popup = createItemPopupMenu(item, isExpense);
+		row.setComponentPopupMenu(popup);
+		iconLabel.setComponentPopupMenu(popup);
+		nameLabel.setComponentPopupMenu(popup);
+		valueLabel.setComponentPopupMenu(popup);
+		textPanel.setComponentPopupMenu(popup);
+
 		return row;
+	}
+
+	/**
+	 * True for synthetic GP-denominated rows ("Death", "GE Tax", "Blast
+	 * Furnace coffer") that are not real inventory items — their underlying
+	 * ids (Skull, coin piles) must never be offered to the ignored-items list.
+	 */
+	static boolean isSyntheticRow(CoinFlowSession.TrackedItem item)
+	{
+		return CoinFlowSession.isSyntheticRowId(item.getItemId());
+	}
+
+	JPanel buildItemFilterBar(int lootCount, int spentCount)
+	{
+		JPanel bar = new JPanel(new GridLayout(1, 3, 4, 0));
+		bar.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		bar.setPreferredSize(new Dimension(0, 22));
+		bar.add(buildFilterButton("All", lootCount + spentCount, ItemFilter.ALL, ACCENT_GOLD));
+		bar.add(buildFilterButton("Loot", lootCount, ItemFilter.LOOT, PROFIT_GREEN));
+		bar.add(buildFilterButton("Spent", spentCount, ItemFilter.SPENT, WARN_ORANGE));
+		return bar;
+	}
+
+	private JButton buildFilterButton(String label, int count, ItemFilter filter, Color activeColor)
+	{
+		JButton btn = new JButton(label + " (" + count + ")");
+		styleButton(btn);
+		boolean active = itemFilter == filter;
+		btn.setForeground(active ? activeColor : ColorScheme.LIGHT_GRAY_COLOR);
+		btn.setFont(active ? FontManager.getRunescapeFont() : FontManager.getRunescapeSmallFont());
+		btn.addActionListener(e -> {
+			if (itemFilter != filter)
+			{
+				itemFilter = filter;
+				refreshItemsCardView();
+			}
+		});
+		return btn;
+	}
+
+	JPopupMenu createItemPopupMenu(CoinFlowSession.TrackedItem item, boolean isExpense)
+	{
+		JPopupMenu popup = new JPopupMenu();
+
+		JMenuItem removeItem = new JMenuItem("Remove from Session");
+		removeItem.addActionListener(e -> plugin.removeSessionItem(item.getItemId(), isExpense));
+		popup.add(removeItem);
+
+		if (!isSyntheticRow(item))
+		{
+			JMenuItem ignoreItem = new JMenuItem("Ignore " + ConsumableRegistry.canonicalIgnoreName(item.getName()));
+			ignoreItem.addActionListener(e -> plugin.ignoreItem(item.getItemId(), item.getName()));
+			popup.add(ignoreItem);
+		}
+
+		JMenuItem wikiItem = new JMenuItem("Open on OSRS Wiki");
+		wikiItem.addActionListener(e -> openItemWiki(item));
+		popup.add(wikiItem);
+
+		return popup;
+	}
+
+	private void openItemWiki(CoinFlowSession.TrackedItem item)
+	{
+		LinkBrowser.browse(wikiUrlForItem(item));
+	}
+
+	static String wikiUrlForItem(CoinFlowSession.TrackedItem item)
+	{
+		if (item.getItemId() == DeathTracker.DEATH_ROW_ID)
+		{
+			return "https://oldschool.runescape.wiki/w/Death";
+		}
+		if (item.getItemId() == GrandExchangeTax.TAX_ITEM_ID)
+		{
+			return "https://oldschool.runescape.wiki/w/Grand_Exchange#Tax";
+		}
+		if (item.getItemId() == BlastFurnaceTracker.COFFER_ROW_ID)
+		{
+			return "https://oldschool.runescape.wiki/w/Blast_Furnace";
+		}
+		return "https://oldschool.runescape.wiki/w/Special:Lookup?type=item&id=" + item.getItemId();
 	}
 
 	private JPanel buildCardHeaderRow(String titleText, boolean collapsed, JLabel previewLabel, Runnable onToggle)

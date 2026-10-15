@@ -145,11 +145,13 @@ final class SessionApplier
 				itemName, quantity, price, (long) quantity * price);
 		}
 
-		// Drain basis even when spent tracking is off so lots never outlive the items they priced
+		// Drain basis even when spent tracking is off or the expense is ignored so
+		// lots never outlive the items they priced.
 		Map<Integer, CoinFlowSession.TrackedItem> repricedExpenses =
 			plugin.grandExchangeTracker.repriceFromBasis(supplyExpenses, fractionalExpenseIds);
 		Map<Integer, CoinFlowSession.TrackedItem> effectiveExpenses =
-			(plugin.config != null && !plugin.config.trackSpent()) ? Collections.emptyMap() : repricedExpenses;
+			(plugin.config != null && !plugin.config.trackSpent()) ? Collections.emptyMap()
+				: filterIgnoredExpenses(repricedExpenses);
 
 		if (!trackedGains.isEmpty() || !droppedGainsDeductions.isEmpty() || !effectiveExpenses.isEmpty())
 		{
@@ -180,15 +182,40 @@ final class SessionApplier
 	}
 
 	/**
+	 * Drops ignored items from a supply-expense batch. Synthetic GP rows
+	 * ("Death", "GE Tax", "Blast Furnace coffer" — see
+	 * {@link CoinFlowSession#isSyntheticRowId}) are exempt by id — their
+	 * backing item names ("Skull", coin piles) are real items a player may
+	 * legitimately ignore without wanting to hide bookkeeping rows.
+	 */
+	private Map<Integer, CoinFlowSession.TrackedItem> filterIgnoredExpenses(
+		Map<Integer, CoinFlowSession.TrackedItem> expenses)
+	{
+		if (plugin.ignoredItemNames == null || plugin.ignoredItemNames.isEmpty() || expenses.isEmpty())
+		{
+			return expenses;
+		}
+		Map<Integer, CoinFlowSession.TrackedItem> filtered = new HashMap<>();
+		for (Map.Entry<Integer, CoinFlowSession.TrackedItem> entry : expenses.entrySet())
+		{
+			int itemId = entry.getKey();
+			CoinFlowSession.TrackedItem expense = entry.getValue();
+			if (!CoinFlowSession.isSyntheticRowId(itemId)
+				&& (isIgnored(expense.getName()) || isIgnored(plugin.getItemName(itemId))))
+			{
+				continue;
+			}
+			filtered.put(itemId, expense);
+		}
+		return filtered;
+	}
+
+	/**
 	 * Checks if an item name is in the user's ignored items list.
 	 */
 	boolean isIgnored(String itemName)
 	{
-		if (plugin.ignoredItemNames == null || plugin.ignoredItemNames.isEmpty())
-		{
-			return false;
-		}
-		return plugin.ignoredItemNames.contains(itemName.toLowerCase());
+		return ConsumableRegistry.isIgnoredName(itemName, plugin.ignoredItemNames);
 	}
 
 	/**

@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarbitID;
 
 /**
  * Per-game-tick orchestration: ages grace windows and take-click records,
@@ -105,6 +107,17 @@ final class GameTickProcessor
 		plugin.matchedUnequipsThisTick.clear();
 
 		plugin.deathFlowCoordinator.onGameTick();
+
+		// Blast Furnace coffer settle: held coin diffs are attributed against
+		// the coffer varbit (deposit/withdrawal transfer vs. drain), the drain
+		// accrues to the synthetic "Blast Furnace coffer" row, and unmatched
+		// held coins expire into fallback accounting. The drain keeps ticking
+		// while the bank chest is open, so no bank-open gate; skipped on
+		// unsupported worlds and mid-death-settle (held entries carry over).
+		if (!unsupportedWorld && !plugin.deathTracker.isPending() && plugin.session != null)
+		{
+			settleBlastFurnaceCoffer();
+		}
 
 		// Finalize pending equipped ammo/thrown weapons and crumbled jewelry
 		// consumed without inventory changes
@@ -250,6 +263,65 @@ final class GameTickProcessor
 		if (plugin.panel != null)
 		{
 			plugin.panel.updateSession(plugin.session);
+		}
+	}
+
+	/**
+	 * Reads the coffer varbit (only while at the furnace), settles the held
+	 * coin diffs and the accrued drain, and applies the outcome to the
+	 * session. When the tracker reports inactive (conveyor despawned /
+	 * LOADING), the settle flushes any remaining drain on the way out.
+	 */
+	private void settleBlastFurnaceCoffer()
+	{
+		int cofferValue = -1;
+		if (plugin.blastFurnaceTracker.isActive()
+			&& plugin.client != null
+			&& !plugin.invalidVarbitIds.contains(VarbitID.BLAST_FURNACE_COFFER))
+		{
+			try
+			{
+				cofferValue = plugin.client.getVarbitValue(VarbitID.BLAST_FURNACE_COFFER);
+			}
+			catch (IndexOutOfBoundsException e)
+			{
+				plugin.invalidVarbitIds.add(VarbitID.BLAST_FURNACE_COFFER);
+				log.debug("Ignoring untracked varbit {} (not varp-backed)", VarbitID.BLAST_FURNACE_COFFER);
+			}
+		}
+
+		BlastFurnaceTracker.Settlement settle = plugin.blastFurnaceTracker.onTick(cofferValue,
+			plugin.client != null ? plugin.client.getTickCount() : 0);
+
+		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
+		Map<Integer, Integer> gains = Collections.emptyMap();
+		if (settle.drainChargeGp > 0)
+		{
+			expenses.put(BlastFurnaceTracker.COFFER_ROW_ID,
+				new CoinFlowSession.TrackedItem(BlastFurnaceTracker.COFFER_ROW_ID,
+					BlastFurnaceTracker.COFFER_ROW_NAME, settle.drainChargeGp, 1L));
+			log.debug("Blast Furnace coffer drain charged: {} gp", settle.drainChargeGp);
+		}
+		if (settle.cashSpendCoins > 0)
+		{
+			String coinsName = plugin.getItemName(ItemID.COINS);
+			expenses.put(ItemID.COINS,
+				new CoinFlowSession.TrackedItem(ItemID.COINS, coinsName, settle.cashSpendCoins, 1L));
+			// Like the cash-spend path in ConsumablesAndDropsHandler: retire
+			// matching session coin gains so pre-session coins dropped later
+			// cannot deduct the already-spent loot a second time.
+			plugin.session = plugin.session.markConsumed(
+				Collections.singletonMap(ItemID.COINS, (long) settle.cashSpendCoins));
+			log.debug("Blast Furnace unmatched coin spend: {} gp", settle.cashSpendCoins);
+		}
+		if (settle.coinGainQty > 0)
+		{
+			gains = Collections.singletonMap(ItemID.COINS, settle.coinGainQty);
+			log.debug("Blast Furnace unmatched coin gain re-applied: {} gp", settle.coinGainQty);
+		}
+		if (!expenses.isEmpty() || !gains.isEmpty())
+		{
+			plugin.processGainsLossesAndExpenses(gains, Collections.emptyMap(), expenses);
 		}
 	}
 }
