@@ -2375,12 +2375,15 @@ public class CoinFlowPluginEventTest
 	}
 
 	/**
-	 * Regression: repairing Barrows gear at a POH armour stand. The degraded
-	 * variants leave and the repaired items arrive with a coin fee — the item
-	 * transition is asset-neutral and only the fee is spent.
+	 * Regression: repairing Barrows gear degraded BEFORE the session at a
+	 * POH armour stand. The degraded variants leave and the repaired items
+	 * arrive with a coin fee — the item transition is asset-neutral, but no
+	 * wear was booked this session so the full fee is a real cash spend.
+	 * (Live repro: a 6,390 gp stand fee vanished because the allowance was
+	 * armed from the pre-repair stage alone.)
 	 */
 	@Test
-	public void armourStandBarrowsRepair_expensesFee_noPhantomProfit()
+	public void armourStandBarrowsRepair_noBookedWear_expensesFee()
 	{
 		int platebodyDegraded = 50001;
 		int platebody = 50002;
@@ -2402,10 +2405,262 @@ public class CoinFlowPluginEventTest
 
 		Assert.assertEquals("Repaired items must not count as profit",
 			0L, plugin.session.getGrossProfit());
-		Assert.assertEquals("The 12,758 gp repair fee must be expensed",
-			12758L, plugin.session.getTotalExpenses());
+		Assert.assertEquals("No wear booked this session — the full fee is a cash spend",
+			12_758L, plugin.session.getTotalExpenses());
 		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(platebodyDegraded));
 		Assert.assertFalse(plugin.recentlyDroppedOwnedItems.containsKey(chainskirtDegraded));
+	}
+
+	/**
+	 * Barrows wear is a real spend even when no repair happens in the
+	 * session: a worn helm dropping 100 -> 75 consumes the rest of its
+	 * 250-point band (249 pts x 60 gp/pt = 14,940) on the "Barrows wear" row.
+	 */
+	@Test
+	public void wornBarrowsDegrade_booksWearExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm100 = 50010;
+		int helm75 = 50011;
+		stubTrackableItem(helm100, "Dharok's helm 100", 1_500_000L);
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.previousEquipmentSnapshot = snapshot(helm100, 1);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN, mockContainer(InventoryID.WORN, helm75, 1)));
+
+		Assert.assertEquals("Wear is deferred to the game tick",
+			0L, plugin.getSession().getTotalExpenses());
+		Assert.assertTrue(plugin.pendingBarrowsWear.containsKey("dharok's helm"));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(14_940L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(-14_940L, plugin.getSession().getTotalProfit());
+		CoinFlowSession.TrackedItem wearRow = plugin.getSession().getTrackedExpenses()
+			.get(com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID);
+		Assert.assertNotNull(wearRow);
+		Assert.assertEquals("Barrows wear", wearRow.getName());
+		Assert.assertEquals(14_940L, wearRow.getQuantity());
+	}
+
+	/**
+	 * Multiple pieces dropping a stage in the same tick merge into a single
+	 * "Barrows wear" charge.
+	 */
+	@Test
+	public void wornBarrowsDegrade_twoPieces_mergeIntoOneRow()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm100 = 50010;
+		int helm75 = 50011;
+		int weapon50 = 50012;
+		int weapon25 = 50013;
+		stubTrackableItem(helm100, "Dharok's helm 100", 1_500_000L);
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+		stubTrackableItem(weapon50, "Dharok's greataxe 50", 1_700_000L);
+		stubTrackableItem(weapon25, "Dharok's greataxe 25", 1_700_000L);
+
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.previousEquipmentSnapshot = snapshot(helm100, 1, weapon50, 1);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN, mockContainer(InventoryID.WORN, helm75, 1, weapon25, 1)));
+
+		plugin.onGameTick(new GameTick());
+
+		// helm 100->75: 249 x 60 = 14,940; greataxe 50->25: 250 x 100 = 25,000
+		Assert.assertEquals(39_940L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(1, plugin.getSession().getTrackedExpenses().size());
+	}
+
+	/**
+	 * Equipping a differently staged spare (worn 100 -> 75 while inventory
+	 * shows 75 -> 100) is a gear swap between two copies, not wear.
+	 */
+	@Test
+	public void barrowsSpareSwap_sameTick_noWearExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm100 = 50010;
+		int helm75 = 50011;
+		stubTrackableItem(helm100, "Dharok's helm 100", 1_500_000L);
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+
+		// Wearing helm100, holding helm75
+		plugin.previousInventorySnapshot = snapshot(helm75, 1);
+		plugin.previousEquipmentSnapshot = snapshot(helm100, 1);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN, mockContainer(InventoryID.WORN, helm75, 1)));
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, helm100, 1)));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	/**
+	 * Wear queued for a piece on the ignored-items list is not booked.
+	 */
+	@Test
+	public void wornBarrowsDegrade_ignoredPiece_noWearExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm100 = 50010;
+		int helm75 = 50011;
+		stubTrackableItem(helm100, "Dharok's helm 100", 1_500_000L);
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+		plugin.ignoredItemNames.add("dharok's helm");
+
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.previousEquipmentSnapshot = snapshot(helm100, 1);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN, mockContainer(InventoryID.WORN, helm75, 1)));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	/**
+	 * Wear queued while tracking is suppressed (bank open on the settle
+	 * tick) is dropped, not booked.
+	 */
+	@Test
+	public void wornBarrowsDegrade_suppressedFlush_noWearExpense()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm100 = 50010;
+		int helm75 = 50011;
+		stubTrackableItem(helm100, "Dharok's helm 100", 1_500_000L);
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.previousEquipmentSnapshot = snapshot(helm100, 1);
+		plugin.snapshotInitialized = true;
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.WORN, mockContainer(InventoryID.WORN, helm75, 1)));
+		Assert.assertTrue(plugin.pendingBarrowsWear.containsKey("dharok's helm"));
+
+		// Bank opens before the tick settles the wear
+		plugin.setTrackingSuppressed(true);
+		plugin.onGameTick(new GameTick());
+		plugin.setTrackingSuppressed(false);
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertTrue(plugin.pendingBarrowsWear.isEmpty());
+	}
+
+	/**
+	 * In-session wear plus a repair: the fee is absorbed against the wear
+	 * allowance so the total spend is the wear only — a 75-stage helm caps
+	 * at 500 pts x 60 = 30,000, so a 12,000 fee books nothing extra.
+	 */
+	@Test
+	public void barrowsRepairAfterWear_feeAbsorbed_totalSpendIsWearOnly()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(100);
+
+		int helm75 = 50011;
+		int helm = 50014;
+		int coinsId = ItemID.COINS;
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+		stubTrackableItem(helm, "Dharok's helm", 1_500_000L);
+
+		plugin.previousInventorySnapshot = snapshot(helm75, 1, coinsId, 100_000);
+		plugin.snapshotInitialized = true;
+
+		plugin.pendingBarrowsWear.put("dharok's helm", 14_940L);
+		plugin.onGameTick(new GameTick());
+		Assert.assertEquals(14_940L, plugin.getSession().getTotalExpenses());
+
+		// Repair the piece: 75 out, bare in, -12,000 coins
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, helm, 1, coinsId, 88_000)));
+
+		Assert.assertEquals("Repair fee absorbed — only the wear counts",
+			14_940L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals("Absorbed fee retires booked wear for future repairs",
+			2_940L, (long) plugin.barrowsWearBookedByPiece.get("dharok's helm"));
+	}
+
+	/**
+	 * A repair fee above the wear booked this session absorbs only the
+	 * booked portion; the remainder is a real cash spend.
+	 */
+	@Test
+	public void barrowsRepair_partialBookedWear_absorbsUpToBooked()
+	{
+		int helm75 = 50011;
+		int helm = 50014;
+		int coinsId = ItemID.COINS;
+		stubTrackableItem(helm75, "Dharok's helm 75", 1_500_000L);
+		stubTrackableItem(helm, "Dharok's helm", 1_500_000L);
+
+		plugin.previousInventorySnapshot = snapshot(helm75, 1, coinsId, 100_000);
+		plugin.snapshotInitialized = true;
+
+		// Only 10,000 gp of wear was expensed against this piece so far
+		plugin.barrowsWearBookedByPiece.put("dharok's helm", 10_000L);
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, helm, 1, coinsId, 88_000)));
+
+		Assert.assertEquals("Absorb the booked 10,000; the rest is a cash spend",
+			2_000L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertFalse("Booked wear fully retired",
+			plugin.barrowsWearBookedByPiece.containsKey("dharok's helm"));
+	}
+
+	/**
+	 * A repair fee above the wear allowance still books the excess as a
+	 * cash spend (a "50" greataxe caps at 750 pts x 100 = 75,000 booked).
+	 */
+	@Test
+	public void barrowsRepair_feeAboveAllowance_booksRemainder()
+	{
+		int axe50 = 50015;
+		int axe = 50016;
+		int coinsId = ItemID.COINS;
+		stubTrackableItem(axe50, "Dharok's greataxe 50", 1_700_000L);
+		stubTrackableItem(axe, "Dharok's greataxe", 1_700_000L);
+
+		plugin.previousInventorySnapshot = snapshot(axe50, 1, coinsId, 200_000);
+		plugin.snapshotInitialized = true;
+		plugin.barrowsWearBookedByPiece.put("dharok's greataxe", 75_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			InventoryID.INV, mockContainer(InventoryID.INV, axe, 1, coinsId, 120_000)));
+
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals("Fee above the 75,000 allowance is a cash spend",
+			5_000L, plugin.getSession().getTotalExpenses());
+		Assert.assertFalse("Booked wear fully retired",
+			plugin.barrowsWearBookedByPiece.containsKey("dharok's greataxe"));
 	}
 
 	@Test

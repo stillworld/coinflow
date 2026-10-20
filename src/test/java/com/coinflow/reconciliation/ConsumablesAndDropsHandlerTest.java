@@ -219,4 +219,70 @@ public class ConsumablesAndDropsHandlerTest
 		Assert.assertEquals(Integer.valueOf(500),
 			context.getRecentlyExpensedDrops().get(ItemID.COINS));
 	}
+
+	@Test
+	public void barrowsRepairFee_absorbedByWearAllowance()
+	{
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(ItemID.COINS, 12758);
+
+		ReconciliationContext context = context(new HashMap<>(), losses);
+		context.addBarrowsRepairAllowance(22_500);
+		handler.reconcile(context);
+
+		Assert.assertTrue("Fee within the wear allowance is not a spend",
+			context.getSupplyExpenses().isEmpty());
+		Assert.assertEquals(22_500 - 12_758, context.getBarrowsRepairAllowanceGp());
+	}
+
+	@Test
+	public void barrowsRepairFee_aboveAllowance_booksRemainder()
+	{
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(ItemID.COINS, 80000);
+
+		ReconciliationContext context = context(new HashMap<>(), losses);
+		context.addBarrowsRepairAllowance(75_000);
+		handler.reconcile(context);
+
+		CoinFlowSession.TrackedItem expense = context.getSupplyExpenses().get(ItemID.COINS);
+		Assert.assertNotNull("Fee above the wear allowance books the remainder", expense);
+		Assert.assertEquals(5_000, expense.getQuantity());
+		Assert.assertEquals(0L, context.getBarrowsRepairAllowanceGp());
+	}
+
+	@Test
+	public void barrowsRepairFee_noAllowance_keepsCashSpendPath()
+	{
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(ItemID.COINS, 12758);
+
+		ReconciliationContext context = context(new HashMap<>(), losses);
+		handler.reconcile(context);
+
+		CoinFlowSession.TrackedItem expense = context.getSupplyExpenses().get(ItemID.COINS);
+		Assert.assertNotNull("A plain fee with no repair still books as cash spend", expense);
+		Assert.assertEquals(12758, expense.getQuantity());
+	}
+
+	@Test
+	public void barrowsRepairFee_absorbedStillRetiresSessionCoinGains()
+	{
+		Map<Integer, CoinFlowSession.TrackedItem> loot = new HashMap<>();
+		loot.put(ItemID.COINS, new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", 10000, 1L));
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGainsLossesAndExpenses(loot, new HashMap<>(), new HashMap<>());
+
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(ItemID.COINS, 4000);
+		ReconciliationContext context = new ReconciliationContext(
+			new HashMap<>(), losses, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, session, itemManager, config, null);
+		context.addBarrowsRepairAllowance(60_000);
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getSupplyExpenses().isEmpty());
+		Assert.assertEquals("Absorbed fee still retires matching session coin gains",
+			Long.valueOf(4000), context.getConsumedSessionQuantities().get(ItemID.COINS));
+	}
 }

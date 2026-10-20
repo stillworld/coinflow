@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.game.ItemManager;
 
@@ -16,6 +17,7 @@ import net.runelite.client.game.ItemManager;
  * and potion dose combining/decanting (e.g. 3-dose + 3-dose -> 4-dose + 2-dose),
  * pricing genuinely consumed doses without counting empty vials or decanted doses as loot/expenses.
  */
+@Slf4j
 public class PotionDoseHandler implements ReconciliationHandler
 {
 	private static class PotionEntry
@@ -228,6 +230,8 @@ public class PotionDoseHandler implements ReconciliationHandler
 					context.addFractionalSupplyExpense(sampleCanonicalId,
 						new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed,
 							expenseTotal / dosesConsumed));
+					log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
+						expenseName, dosesConsumed, expenseTotal / dosesConsumed, expenseTotal);
 				}
 			}
 

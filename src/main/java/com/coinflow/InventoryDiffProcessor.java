@@ -74,6 +74,8 @@ final class InventoryDiffProcessor
 				plugin.deathTracker.onContainerChanged(plugin.client != null ? plugin.client.getTickCount() : 0);
 				plugin.previousEquipmentSnapshot = currentEquip;
 				plugin.pendingWornAmmoExpenses.clear();
+				plugin.pendingBarrowsWear.clear();
+				plugin.barrowsSwapBasesThisTick.clear();
 				plugin.weaponChargeTracker.reset();
 				plugin.recentlyUnequippedItems.clear();
 				plugin.recentlyEquippedItems.clear();
@@ -85,6 +87,8 @@ final class InventoryDiffProcessor
 			{
 				plugin.previousEquipmentSnapshot = currentEquip;
 				plugin.pendingWornAmmoExpenses.clear();
+				plugin.pendingBarrowsWear.clear();
+				plugin.barrowsSwapBasesThisTick.clear();
 				plugin.weaponChargeTracker.reset();
 				plugin.recentlyUnequippedItems.clear();
 				plugin.recentlyEquippedItems.clear();
@@ -123,6 +127,23 @@ final class InventoryDiffProcessor
 							if (com.coinflow.reconciliation.ChargeDegradationHandler.isChargeDegradationPair(removedName, addedName))
 							{
 								int match = Math.min(removedEntry.getValue(), addedEntry.getValue());
+
+								// Worn Barrows gear degrading in place is real
+								// spend — queue the wear; booked on GameTick
+								// once same-tick same-base INV swaps are known.
+								long wearGp = com.coinflow.reconciliation.BarrowsWear.wearCostGp(removedName, addedName);
+								if (wearGp > 0)
+								{
+									com.coinflow.reconciliation.BarrowsWear.Piece piece =
+										com.coinflow.reconciliation.BarrowsWear.parse(removedName);
+									if (piece != null && !ConsumableRegistry.isIgnoredName(piece.baseName, plugin.ignoredItemNames))
+									{
+										plugin.pendingBarrowsWear.merge(piece.baseName.toLowerCase(java.util.Locale.ROOT),
+											wearGp * match, Long::sum);
+										log.debug("Queued Barrows wear: {} -> {} (x{}) = {} gp",
+											removedName, addedName, match, wearGp * match);
+									}
+								}
 								if (addedEntry.getValue() <= match)
 								{
 									addedIt.remove();
@@ -649,6 +670,32 @@ final class InventoryDiffProcessor
 				}
 			}
 
+			// A Barrows piece moving UP a stage in inventory (staged out,
+			// higher-stage/bare in) is a swap between two copies, not wear —
+			// WORN sees the mirror image as a fake degradation. Mark the base
+			// so the GameTick wear flush skips it. Done on the raw diff before
+			// GearSwapHandler can cancel the pair away.
+			if (!rawLosses.isEmpty() && !rawGains.isEmpty())
+			{
+				for (Map.Entry<Integer, Integer> lostEntry : rawLosses.entrySet())
+				{
+					int lostId = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostEntry.getKey()) : lostEntry.getKey();
+					String lostName = plugin.getItemName(lostId);
+					for (Map.Entry<Integer, Integer> gainedEntry : rawGains.entrySet())
+					{
+						int gainedId = plugin.itemManager != null ? plugin.itemManager.canonicalize(gainedEntry.getKey()) : gainedEntry.getKey();
+						String gainedName = plugin.getItemName(gainedId);
+						com.coinflow.reconciliation.BarrowsWear.Piece lostPiece =
+							com.coinflow.reconciliation.BarrowsWear.parse(lostName);
+						if (lostPiece != null
+							&& com.coinflow.reconciliation.BarrowsWear.isUpwardPair(lostName, gainedName))
+						{
+							plugin.barrowsSwapBasesThisTick.add(lostPiece.baseName.toLowerCase(java.util.Locale.ROOT));
+						}
+					}
+				}
+			}
+
 			ItemContainer currentEquipContainer = plugin.client != null ? plugin.client.getItemContainer(InventoryID.WORN) : null;
 			ReconciliationContext context = new ReconciliationContext(
 				rawGains,
@@ -668,6 +715,7 @@ final class InventoryDiffProcessor
 				plugin.pendingWornAmmoExpenses,
 				plugin.matchedUnequipsThisTick
 			);
+			context.setBarrowsWearBookedByPiece(plugin.barrowsWearBookedByPiece);
 			int currentTick = plugin.client != null ? plugin.client.getTickCount() : 0;
 			Set<Integer> liveDropIntents = plugin.expireDropIntents(currentTick);
 			if (!liveDropIntents.isEmpty())
@@ -807,7 +855,8 @@ final class InventoryDiffProcessor
 			}
 
 			if (!context.getRawGains().isEmpty() || !context.getDroppedGainsDeductions().isEmpty()
-				|| !context.getSupplyExpenses().isEmpty() || !context.getExpenseReversals().isEmpty())
+				|| !context.getSupplyExpenses().isEmpty() || !context.getExpenseReversals().isEmpty()
+				|| !context.getConsumedSessionQuantities().isEmpty())
 			{
 				plugin.session = plugin.session.markConsumed(context.getConsumedSessionQuantities());
 				plugin.session = plugin.session.withExpenseReversal(context.getExpenseReversals());

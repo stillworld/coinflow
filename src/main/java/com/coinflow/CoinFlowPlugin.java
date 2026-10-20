@@ -171,6 +171,30 @@ public class CoinFlowPlugin extends Plugin
 	final Map<Integer, Integer> pendingWornAmmoExpenses = new HashMap<>();
 
 	/**
+	 * Worn Barrows gear that dropped a degradation stage this tick —
+	 * base name (lower-case) -> gp of wear at NPC repair rates. Deferred to
+	 * GameTick so a same-tick same-base INV swap (equipping a differently
+	 * staged spare) can veto it; then booked on the synthetic "Barrows wear"
+	 * row ({@link com.coinflow.reconciliation.BarrowsWear#WEAR_ROW_ID}).
+	 */
+	final Map<String, Long> pendingBarrowsWear = new HashMap<>();
+
+	/**
+	 * Barrows base names (lower-case) that moved UP a stage in INV this tick —
+	 * a spare-copy swap, not a repair — so matching pending wear is dropped.
+	 */
+	final java.util.Set<String> barrowsSwapBasesThisTick = new HashSet<>();
+
+	/**
+	 * Barrows base name (lower-case) -> gp of wear expensed to the session so
+	 * far. A repair fee absorbs only against wear actually booked, so gear
+	 * degraded before the session pays its repair as a normal cash spend.
+	 * Cleared on session/account reset only — the wear row lives in the
+	 * session, so the ledger must survive logout/death alongside it.
+	 */
+	final Map<String, Long> barrowsWearBookedByPiece = new HashMap<>();
+
+	/**
 	 * Tracks resources consumed inside charged weapons (runes, scales, shards)
 	 * via CHARGES_*_QUANTITY varbits, which never produce an inventory diff.
 	 */
@@ -680,6 +704,8 @@ public class CoinFlowPlugin extends Plugin
 		if (interfaceTracker.isTrackingSuppressed())
 		{
 			pendingWornAmmoExpenses.clear();
+			pendingBarrowsWear.clear();
+			barrowsSwapBasesThisTick.clear();
 			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();
@@ -699,6 +725,8 @@ public class CoinFlowPlugin extends Plugin
 				previousEquipmentSnapshot = takeSnapshot(worn);
 			}
 			pendingWornAmmoExpenses.clear();
+			pendingBarrowsWear.clear();
+			barrowsSwapBasesThisTick.clear();
 			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();
@@ -726,6 +754,8 @@ public class CoinFlowPlugin extends Plugin
 				previousEquipmentSnapshot = takeSnapshot(worn);
 			}
 			pendingWornAmmoExpenses.clear();
+			pendingBarrowsWear.clear();
+			barrowsSwapBasesThisTick.clear();
 			weaponChargeTracker.reset();
 			recentlyUnequippedItems.clear();
 			recentlyEquippedItems.clear();

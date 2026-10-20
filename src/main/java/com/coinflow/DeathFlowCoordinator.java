@@ -110,6 +110,8 @@ final class DeathFlowCoordinator
 		plugin.minigameHudGraceTicks = 0;
 		plugin.weaponChargeTracker.reset();
 		plugin.pendingWornAmmoExpenses.clear();
+		plugin.pendingBarrowsWear.clear();
+		plugin.barrowsSwapBasesThisTick.clear();
 
 		if (lost.isEmpty())
 		{

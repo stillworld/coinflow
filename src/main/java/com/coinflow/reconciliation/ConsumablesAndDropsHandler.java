@@ -60,16 +60,34 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 			}
 
 			// Cash payments: coins/platinum leaving with no specialist claim is
-			// money spent — fees, fares, repairs, coffers, services. Expense at
-			// face value; a drop-intent coin loss keeps the own-drop path, and
-			// cash must never enter the drop bookkeeping, where it would
-			// suppress later coin pickups.
+			// money spent — fees, fares, coffers, services. Expense at face
+			// value; a drop-intent coin loss keeps the own-drop path, and cash
+			// must never enter the drop bookkeeping, where it would suppress
+			// later coin pickups.
 			if ((itemId == ItemID.COINS || itemId == ItemID.PLATINUM) && !context.isDropIntent(itemId))
 			{
-				long price = itemId == ItemID.PLATINUM ? 1000L : 1L;
-				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-				context.retireSessionGain(itemId, quantity);
-				log.debug("Cash spend: {} x{} = {} gp", itemName, quantity, (long) quantity * price);
+				long cashQty = quantity;
+				if (itemId == ItemID.COINS && context.getBarrowsRepairAllowanceGp() > 0)
+				{
+					// A Barrows repair in this diff pays off wear already
+					// expensed as it accrued — the fee is a recharge, not a
+					// new spend (same model as weapon recharges). Fee arriving
+					// in a separate diff falls back to a plain cash spend.
+					long absorbed = context.consumeBarrowsRepairAllowance(cashQty);
+					cashQty -= absorbed;
+					if (absorbed > 0)
+					{
+						context.retireSessionGain(itemId, absorbed);
+						log.debug("Barrows repair fee absorbed: {} gp", absorbed);
+					}
+				}
+				if (cashQty > 0)
+				{
+					long price = itemId == ItemID.PLATINUM ? 1000L : 1L;
+					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, cashQty, price));
+					context.retireSessionGain(itemId, cashQty);
+					log.debug("Cash spend: {} x{} = {} gp", itemName, cashQty, cashQty * price);
+				}
 				continue;
 			}
 

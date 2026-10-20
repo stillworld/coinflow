@@ -145,6 +145,41 @@ final class GameTickProcessor
 			}
 		}
 
+		// Book worn Barrows wear queued this tick. Deferred from the WORN diff
+		// so a same-tick same-base INV swap (equipping a differently staged
+		// spare) can veto the pair before the wear is charged.
+		if (!plugin.pendingBarrowsWear.isEmpty() || !plugin.barrowsSwapBasesThisTick.isEmpty())
+		{
+			if (plugin.isTrackingSuppressed() || plugin.isBankOrContainerOpen() || plugin.interfaceTracker.isShopOpen() || plugin.interfaceTracker.isNeedsRebaseline() || plugin.rebaselineGraceTicks > 0 || plugin.deathTracker.isPending())
+			{
+				plugin.pendingBarrowsWear.clear();
+				plugin.barrowsSwapBasesThisTick.clear();
+			}
+			else
+			{
+				long wearGp = 0;
+				for (Map.Entry<String, Long> entry : plugin.pendingBarrowsWear.entrySet())
+				{
+					if (!plugin.barrowsSwapBasesThisTick.contains(entry.getKey()))
+					{
+						wearGp += entry.getValue();
+						plugin.barrowsWearBookedByPiece.merge(entry.getKey(), entry.getValue(), Long::sum);
+					}
+				}
+				plugin.pendingBarrowsWear.clear();
+				plugin.barrowsSwapBasesThisTick.clear();
+				if (wearGp > 0)
+				{
+					Map<Integer, CoinFlowSession.TrackedItem> wearExpenses = new HashMap<>();
+					wearExpenses.put(com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID,
+						new CoinFlowSession.TrackedItem(com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID,
+							com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_NAME, wearGp, 1L));
+					log.debug("Barrows wear charged on tick: {} gp", wearGp);
+					plugin.processGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), wearExpenses);
+				}
+			}
+		}
+
 		// Finalize pending charge-based supply costs (runes/scales/shards stored inside weapons)
 		boolean chargeTrackingAllowed = !plugin.isTrackingSuppressed() && !plugin.isBankOrContainerOpen()
 			&& !plugin.interfaceTracker.isShopOpen()

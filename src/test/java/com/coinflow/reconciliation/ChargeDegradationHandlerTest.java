@@ -437,6 +437,43 @@ public class ChargeDegradationHandlerTest
 		Assert.assertTrue("Repaired item must not count as profit", context.getRawGains().isEmpty());
 		Assert.assertEquals("Only the coin fee remains in losses for the cash handler",
 			java.util.Collections.singletonMap(ItemID.COINS, 12758), context.getRawLosses());
+		Assert.assertEquals("Repair arms a fee allowance: stage-100 body caps at 250 pts x 90 gp",
+			22_500L, context.getBarrowsRepairAllowanceGp());
+	}
+
+	@Test
+	public void barrowsDegrade_75to50_armsNoRepairAllowance()
+	{
+		stubItem(50005, "Guthan's platebody 75", 150000L);
+		stubItem(50006, "Guthan's platebody 50", 150000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(50006, 1);
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(50005, 1);
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue(context.getRawGains().isEmpty());
+		Assert.assertTrue(context.getRawLosses().isEmpty());
+		Assert.assertEquals("Usage wear arms no repair allowance",
+			0L, context.getBarrowsRepairAllowanceGp());
 	}
 
 	@Test
