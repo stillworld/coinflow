@@ -1153,6 +1153,10 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			return "https://oldschool.runescape.wiki/w/Blast_Furnace";
 		}
+		if (item.getItemId() == com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID)
+		{
+			return "https://oldschool.runescape.wiki/w/Barrows_equipment#Degrading";
+		}
 		return "https://oldschool.runescape.wiki/w/Special:Lookup?type=item&id=" + item.getItemId();
 	}
 

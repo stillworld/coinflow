@@ -5,12 +5,14 @@ import com.coinflow.ConsumableRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.game.ItemManager;
 
 /**
  * Handles multi-bite food portions (e.g. Summer pie -> Half a summer pie, pizzas, cakes),
  * consuming whole items and attributing portion supply expenses without marking portions as loot.
  */
+@Slf4j
 public class FoodPortionHandler implements ReconciliationHandler
 {
 	@Override
@@ -97,6 +99,8 @@ public class FoodPortionHandler implements ReconciliationHandler
 					context.addFractionalSupplyExpense(canonicalLostId,
 						new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions,
 							expenseTotal / portions));
+					log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
+						expenseName, portions, expenseTotal / portions, expenseTotal);
 				}
 			}
 		}

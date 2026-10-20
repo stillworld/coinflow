@@ -482,15 +482,18 @@ public final class CoinFlowSession
 	 * True for synthetic GP-denominated ledger rows that are not real
 	 * inventory items: "Death" ({@link DeathTracker#DEATH_ROW_ID}), "GE Tax"
 	 * ({@link GrandExchangeTax#TAX_ITEM_ID}) and "Blast Furnace coffer"
-	 * ({@link BlastFurnaceTracker#COFFER_ROW_ID}). Their backing ids (Skull,
-	 * coin piles) must never be offered to the ignored-items list, and the
-	 * rows carry gp as their quantity at price 1.
+	 * ({@link BlastFurnaceTracker#COFFER_ROW_ID}) and "Barrows wear"
+	 * ({@link com.coinflow.reconciliation.BarrowsWear#WEAR_ROW_ID}). Their
+	 * backing ids (Skull, coin piles, interface sprite) must never be offered
+	 * to the ignored-items list, and the rows carry gp as their quantity at
+	 * price 1.
 	 */
 	public static boolean isSyntheticRowId(int itemId)
 	{
 		return itemId == DeathTracker.DEATH_ROW_ID
 			|| itemId == GrandExchangeTax.TAX_ITEM_ID
-			|| itemId == BlastFurnaceTracker.COFFER_ROW_ID;
+			|| itemId == BlastFurnaceTracker.COFFER_ROW_ID
+			|| itemId == com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID;
 	}
 
 	/**

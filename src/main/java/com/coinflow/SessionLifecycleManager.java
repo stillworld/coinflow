@@ -257,6 +257,8 @@ final class SessionLifecycleManager
 			plugin.previousEquipmentSnapshot = plugin.takeSnapshot(equipContainer);
 		}
 		plugin.pendingWornAmmoExpenses.clear();
+		plugin.pendingBarrowsWear.clear();
+		plugin.barrowsSwapBasesThisTick.clear();
 		plugin.recentlyUnequippedItems.clear();
 		plugin.recentlyEquippedItems.clear();
 		plugin.gearSwapItemTicks.clear();
@@ -289,6 +291,8 @@ final class SessionLifecycleManager
 		plugin.containerPickupTracker.resetTransient();
 		plugin.matchedUnequipsThisTick.clear();
 		plugin.pendingWornAmmoExpenses.clear();
+		plugin.pendingBarrowsWear.clear();
+		plugin.barrowsSwapBasesThisTick.clear();
 		plugin.weaponChargeTracker.reset();
 		plugin.lastSkillingGemId = -1;
 		plugin.lastSkillingGemTick = -100;
@@ -351,6 +355,7 @@ final class SessionLifecycleManager
 		}
 		plugin.session = CoinFlowSession.createNew();
 		plugin.goalCompletedNotified = false;
+		plugin.barrowsWearBookedByPiece.clear();
 		plugin.grandExchangeTracker.reset();
 		plugin.deathTracker.reset();
 		plugin.cannonTracker.reset();

@@ -122,6 +122,74 @@ public class ReconciliationContext
 	@Getter
 	private final java.util.Set<Integer> dropIntentIds = new java.util.HashSet<>();
 
+	/**
+	 * Gp of repair fees this diff may absorb without booking a spend. Arming
+	 * happens when a staged Barrows piece is paired with its repaired bare
+	 * name; wear was expensed as it accrued, so paying for a repair is a
+	 * recharge, not a new cost — same model as weapon recharges (net-zero).
+	 * Capped at the most wear the pre-repair stage could represent, and —
+	 * when {@link #barrowsWearBookedByPiece} is set — at the wear actually
+	 * booked against that piece this session.
+	 */
+	@Getter
+	private long barrowsRepairAllowanceGp;
+
+	/** Keyed arms of {@link #barrowsRepairAllowanceGp} (lower-case base name -> gp). */
+	private final Map<String, Long> barrowsRepairAllowanceByBase = new HashMap<>();
+
+	/**
+	 * Live session ledger of Barrows wear expensed per base piece
+	 * (lower-case base name -> gp). Set by InventoryDiffProcessor to the
+	 * plugin's map; consumed fees retire entries so booked wear is never
+	 * double-absorbed across diffs or repairs.
+	 */
+	@Getter
+	@Setter
+	private Map<String, Long> barrowsWearBookedByPiece;
+
+	public void addBarrowsRepairAllowance(long gp)
+	{
+		barrowsRepairAllowanceGp += gp;
+	}
+
+	public void addBarrowsRepairAllowance(String baseName, long gp)
+	{
+		barrowsRepairAllowanceGp += gp;
+		barrowsRepairAllowanceByBase.merge(baseName, gp, Long::sum);
+	}
+
+	public long consumeBarrowsRepairAllowance(long gp)
+	{
+		long absorbed = Math.min(gp, barrowsRepairAllowanceGp);
+		barrowsRepairAllowanceGp -= absorbed;
+		// Retire booked wear only by the amount actually absorbed — allowance
+		// armed beyond the fee stays booked for future repairs.
+		if (absorbed > 0 && barrowsWearBookedByPiece != null)
+		{
+			long remaining = absorbed;
+			for (Map.Entry<String, Long> entry : barrowsRepairAllowanceByBase.entrySet())
+			{
+				if (remaining <= 0)
+				{
+					break;
+				}
+				long take = Math.min(remaining, entry.getValue());
+				entry.setValue(entry.getValue() - take);
+				remaining -= take;
+				long booked = barrowsWearBookedByPiece.getOrDefault(entry.getKey(), 0L) - take;
+				if (booked > 0)
+				{
+					barrowsWearBookedByPiece.put(entry.getKey(), booked);
+				}
+				else
+				{
+					barrowsWearBookedByPiece.remove(entry.getKey());
+				}
+			}
+		}
+		return absorbed;
+	}
+
 	public boolean isDropIntent(int canonicalItemId)
 	{
 		return dropIntentIds.contains(canonicalItemId);

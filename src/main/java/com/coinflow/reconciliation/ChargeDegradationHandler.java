@@ -128,6 +128,28 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				{
 					int gainedQty = rawGains.get(gainedMatchId);
 					int matched = Math.min(lostQty, gainedQty);
+					// A staged Barrows piece returning to its bare name is a
+					// repair: arm a fee allowance so the coin loss in this
+					// diff is absorbed rather than booked as a fresh spend
+					// (wear is expensed as it accrues — see BarrowsWear).
+					String matchedGainName = context.getItemName(
+						itemManager != null ? itemManager.canonicalize(gainedMatchId) : gainedMatchId);
+					BarrowsWear.Piece gainedPiece = BarrowsWear.parse(matchedGainName);
+					if (gainedPiece != null && gainedPiece.points == 1000
+						&& BarrowsWear.isUpwardPair(lostName, matchedGainName))
+					{
+						String baseKey = gainedPiece.baseName.toLowerCase(java.util.Locale.ROOT);
+						long allowance = BarrowsWear.repairAllowanceGp(lostName) * matched;
+						if (context.getBarrowsWearBookedByPiece() != null)
+						{
+							allowance = Math.min(allowance,
+								context.getBarrowsWearBookedByPiece().getOrDefault(baseKey, 0L));
+						}
+						if (allowance > 0)
+						{
+							context.addBarrowsRepairAllowance(baseKey, allowance);
+						}
+					}
 
 					if (gainedQty <= matched)
 					{
@@ -318,10 +340,7 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 
 	private static boolean isBarrowsBrotherItem(String baseName)
 	{
-		String lower = baseName.toLowerCase(java.util.Locale.ROOT);
-		return lower.startsWith("ahrim's ") || lower.startsWith("dharok's ")
-			|| lower.startsWith("guthan's ") || lower.startsWith("karil's ")
-			|| lower.startsWith("torag's ") || lower.startsWith("verac's ");
+		return BarrowsWear.isBarrowsBaseName(baseName);
 	}
 
 	private static boolean matchesUnchargedBase(String bareName, ChargeInfo charged)
