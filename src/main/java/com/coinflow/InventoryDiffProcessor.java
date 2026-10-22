@@ -60,6 +60,24 @@ final class InventoryDiffProcessor
 			return;
 		}
 
+		// ── Sailing boat cargo holds ─────────────────────────────────────
+		// Anything consumed straight out of the hold (landing-site/facility
+		// builds, ship-cannon shots) produces no INV event, so route the hold
+		// change through the merged snapshot diff. Deposits/withdrawals go
+		// through the (suppressed) hold interface and baseline away.
+		if (InventorySnapshotService.isSailingCargoContainer(containerId))
+		{
+			if (plugin.client != null)
+			{
+				ItemContainer invContainer = plugin.client.getItemContainer(InventoryID.INV);
+				if (invContainer != null)
+				{
+					processInventoryChanges(invContainer, true);
+				}
+			}
+			return;
+		}
+
 		// ── Handle Equipment changes (detect gear unequipped into inventory) ──
 		if (containerId == InventoryID.WORN)
 		{
@@ -332,6 +350,11 @@ final class InventoryDiffProcessor
 
 	void processInventoryChanges(ItemContainer invContainer)
 	{
+		processInventoryChanges(invContainer, false);
+	}
+
+	void processInventoryChanges(ItemContainer invContainer, boolean cargoHoldDiff)
+	{
 		if (plugin.session == null)
 		{
 			return;
@@ -530,6 +553,15 @@ final class InventoryDiffProcessor
 				{
 					plugin.lootingBagInitialized = true;
 				}
+				// If the swallowed diff contained pouch-rune rows, the baseline
+				// absorbed one half of a pouch transfer — held counterparts are
+				// now unpaired, so drop them and suppress settle for the window
+				// the other half may land in.
+				if (containsPouchRuneRow(rawGains) || containsPouchRuneRow(rawLosses))
+				{
+					plugin.pendingPouchDiffs.clear();
+					plugin.pouchAbsorbBaselineTick = plugin.client != null ? plugin.client.getTickCount() : -1;
+				}
 				plugin.rebaselineGraceTicks = 0;
 				plugin.interfaceTracker.setNeedsRebaseline(false);
 				return;
@@ -696,193 +728,310 @@ final class InventoryDiffProcessor
 				}
 			}
 
-			ItemContainer currentEquipContainer = plugin.client != null ? plugin.client.getItemContainer(InventoryID.WORN) : null;
-			ReconciliationContext context = new ReconciliationContext(
-				rawGains,
-				rawLosses,
-				plugin.recentlyUnequippedItems,
-				plugin.recentlyEquippedItems,
-				plugin.recentlyDroppedItems,
-				plugin.recentlyDroppedOwnedItems,
-				plugin.recentlyExpensedDrops,
-				plugin.previousEquipmentSnapshot,
-				currentEquipContainer,
-				plugin.session,
-				plugin.grandExchangeTracker,
-				plugin.itemManager,
-				plugin.config,
-				plugin.ignoredItemNames,
-				plugin.pendingWornAmmoExpenses,
-				plugin.matchedUnequipsThisTick
-			);
-			context.setBarrowsWearBookedByPiece(plugin.barrowsWearBookedByPiece);
-			int currentTick = plugin.client != null ? plugin.client.getTickCount() : 0;
-			Set<Integer> liveDropIntents = plugin.expireDropIntents(currentTick);
-			if (!liveDropIntents.isEmpty())
+			// A rune-pouch transfer splits across an ItemContainerChanged and a
+			// VarbitChanged that can arrive in either order — each half diffs as
+			// a phantom gain/loss on its own. While a pouch is carried, defer
+			// pouch-eligible rune rows and settle the net on GameTick, when
+			// both halves have landed and cancel out.
+			Set<Integer> deferredRuneLosses = Collections.emptySet();
+			if (plugin.hasRunePouch(invContainer))
 			{
-				for (int lostId : rawLosses.keySet())
+				deferredRuneLosses = deferPouchRuneDiffs(rawGains, rawLosses);
+				if (rawGains.isEmpty() && rawLosses.isEmpty())
 				{
-					int canonicalLost = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostId) : lostId;
-					if (liveDropIntents.contains(canonicalLost))
-					{
-						context.getDropIntentIds().add(canonicalLost);
-						plugin.recentDropIntents.remove(canonicalLost);
-					}
-				}
-			}
-			Set<Integer> liveOpenIntents = plugin.expireOpenIntents(currentTick);
-			if (!liveOpenIntents.isEmpty())
-			{
-				for (int lostId : rawLosses.keySet())
-				{
-					int canonicalLost = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostId) : lostId;
-					if (liveOpenIntents.contains(canonicalLost))
-					{
-						context.getOpenIntentIds().add(canonicalLost);
-						plugin.recentOpenIntents.remove(canonicalLost);
-					}
-				}
-			}
-			cannonReversals.forEach(context::addExpenseReversal);
-
-			if (plugin.client != null)
-			{
-				for (Map.Entry<Skill, Integer> entry : plugin.lastSkillXpTicks.entrySet())
-				{
-					int tick = entry.getValue();
-					if (tick == currentTick || tick == currentTick - 1)
-					{
-						context.addActiveSkillingSkill(entry.getKey());
-					}
-				}
-
-				boolean isFiremaking = plugin.lastTinderboxActionTick >= currentTick - 5 && plugin.lastTinderboxActionTick > 0
-					|| plugin.lastFiremakingAnimTick >= currentTick - 3 && plugin.lastFiremakingAnimTick > 0
-					|| plugin.lastFiremakingChatTick >= currentTick - 2 && plugin.lastFiremakingChatTick > 0;
-				if (!isFiremaking && plugin.client.getLocalPlayer() != null)
-				{
-					int anim = plugin.client.getLocalPlayer().getAnimation();
-					if (ActionClassifiers.isFiremakingAnimation(anim))
-					{
-						isFiremaking = true;
-						plugin.lastFiremakingAnimTick = currentTick;
-					}
-				}
-				if (isFiremaking)
-				{
-					context.addActiveSkillingSkill(Skill.FIREMAKING);
-				}
-
-				boolean isFarming = (plugin.lastFarmingActionTick >= currentTick - 8 && plugin.lastFarmingActionTick > 0)
-					|| (plugin.lastFarmingAnimTick >= currentTick - 2 && plugin.lastFarmingAnimTick > 0)
-					|| (plugin.lastFarmingChatTick >= currentTick - 2 && plugin.lastFarmingChatTick > 0);
-				if (!isFarming && plugin.client.getLocalPlayer() != null)
-				{
-					int anim = plugin.client.getLocalPlayer().getAnimation();
-					if (ActionClassifiers.isFarmingAnimation(anim))
-					{
-						isFarming = true;
-						plugin.lastFarmingAnimTick = currentTick;
-					}
-				}
-				if (isFarming)
-				{
-					context.addActiveSkillingSkill(Skill.FARMING);
-				}
-
-				boolean isAlchemy = (plugin.lastAlchActionTick >= currentTick - 3 && plugin.lastAlchActionTick > 0)
-					|| (plugin.lastAlchAnimTick >= currentTick - 3 && plugin.lastAlchAnimTick > 0)
-					|| (plugin.lastSkillXpTicks.containsKey(Skill.MAGIC) && plugin.lastSkillXpTicks.get(Skill.MAGIC) >= currentTick - 1);
-				if (!isAlchemy && plugin.client.getLocalPlayer() != null)
-				{
-					int anim = plugin.client.getLocalPlayer().getAnimation();
-					if (ActionClassifiers.isAlchemyAnimation(anim))
-					{
-						isAlchemy = true;
-						plugin.lastAlchAnimTick = currentTick;
-					}
-				}
-				if (isAlchemy)
-				{
-					context.setAlchemy(true);
-				}
-
-				context.setNotingService(currentTick - plugin.lastNotingServiceTick <= 5);
-			}
-
-			context.setBlastFurnaceActive(plugin.blastFurnaceTracker.isActive());
-			plugin.reconciliationEngine.reconcile(context);
-
-			// Drain any remaining consumed equipped ammo/thrown weapons or crumbled
-			// jewelry into supply expenses
-			if (!plugin.pendingWornAmmoExpenses.isEmpty())
-			{
-				for (Map.Entry<Integer, Integer> entry : plugin.pendingWornAmmoExpenses.entrySet())
-				{
-					int itemId = entry.getKey();
-					int quantity = entry.getValue();
-					String itemName = plugin.getItemName(itemId);
-					long price = ItemPricing.priceOf(itemId, plugin.itemManager);
-					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-					log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
-					plugin.removeRecentlyUnequipped(itemId, quantity);
-				}
-				plugin.pendingWornAmmoExpenses.clear();
-			}
-
-			if (currentTick > 0)
-			{
-				for (int id : context.getRecentlyDroppedItems().keySet())
-				{
-					plugin.droppedItemTicks.put(id, currentTick);
-				}
-				for (int id : context.getRecentlyDroppedOwnedItems().keySet())
-				{
-					plugin.droppedItemTicks.put(id, currentTick);
-				}
-				for (int id : context.getRecentlyExpensedDrops().keySet())
-				{
-					plugin.droppedItemTicks.put(id, currentTick);
+					plugin.previousInventorySnapshot = currentSnapshot;
+					return;
 				}
 			}
 
-			// Pop gold drop for the positive profit margin (if profitable and meets threshold)
-			if (context.getAlchedTotalMargin() > 0 && plugin.config.showGoldDrops() && plugin.goldDropOverlay != null
-				&& context.getAlchedTotalMargin() >= plugin.config.goldDropMinThreshold())
-			{
-				String dropText = "+" + QuantityFormatter.quantityToStackSize(context.getAlchedTotalMargin()) + " gp";
-				plugin.goldDropOverlay.addDrop(dropText, context.getAlchedItemRawId(), 0);
-			}
-
-			if (!context.getRawGains().isEmpty() || !context.getDroppedGainsDeductions().isEmpty()
-				|| !context.getSupplyExpenses().isEmpty() || !context.getExpenseReversals().isEmpty()
-				|| !context.getConsumedSessionQuantities().isEmpty())
-			{
-				plugin.session = plugin.session.markConsumed(context.getConsumedSessionQuantities());
-				plugin.session = plugin.session.withExpenseReversal(context.getExpenseReversals());
-				plugin.processGainsLossesAndExpenses(
-					context.getRawGains(),
-					context.getDroppedGainsDeductions(),
-					context.getSupplyExpenses(),
-					context.getAlchedDropItemId(),
-					context.getExemptProductIds(),
-					context.getBasisExcludedExpenseIds()
-				);
-
-				if (context.getActiveSkillingSkills().contains(Skill.FIREMAKING))
-				{
-					plugin.lastTinderboxActionTick = -100;
-				}
-				if (context.getActiveSkillingSkills().contains(Skill.FARMING))
-				{
-					plugin.lastFarmingActionTick = -100;
-					plugin.lastFarmingAnimTick = -100;
-					plugin.lastFarmingChatTick = -100;
-				}
-			}
+			reconcileAndApplyDiff(rawGains, rawLosses, cannonReversals, deferredRuneLosses, cargoHoldDiff);
 		}
 
 		plugin.previousInventorySnapshot = currentSnapshot;
+	}
+
+	private Set<Integer> deferPouchRuneDiffs(Map<Integer, Integer> gains, Map<Integer, Integer> losses)
+	{
+		deferPouchRuneRows(gains, 1, null);
+		Set<Integer> deferredLosses = new java.util.HashSet<>();
+		deferPouchRuneRows(losses, -1, deferredLosses);
+		return deferredLosses;
+	}
+
+	private void deferPouchRuneRows(Map<Integer, Integer> diff, int sign, Set<Integer> deferred)
+	{
+		Iterator<Map.Entry<Integer, Integer>> it = diff.entrySet().iterator();
+		while (it.hasNext())
+		{
+			Map.Entry<Integer, Integer> entry = it.next();
+			int itemId = plugin.itemManager != null ? plugin.itemManager.canonicalize(entry.getKey()) : entry.getKey();
+			if (plugin.getSnapshotService().isPouchRuneId(itemId))
+			{
+				plugin.pendingPouchDiffs.merge(itemId, sign * entry.getValue(), Integer::sum);
+				if (deferred != null)
+				{
+					deferred.add(itemId);
+				}
+				it.remove();
+			}
+		}
+	}
+
+	private boolean containsPouchRuneRow(Map<Integer, Integer> diff)
+	{
+		for (int itemId : diff.keySet())
+		{
+			int canonical = plugin.itemManager != null ? plugin.itemManager.canonicalize(itemId) : itemId;
+			if (plugin.getSnapshotService().isPouchRuneId(canonical))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Settles deferred pouch-rune diff rows once per GameTick, after the
+	 * container and varbit halves of a transfer have both landed. The net
+	 * leftover is a real diff (spell costs, pickups, drops): routed through
+	 * the normal reconciliation path. Held rows are discarded while tracking
+	 * is suppressed — the baseline has already absorbed the transfer.
+	 */
+	void settlePendingPouchDiffs()
+	{
+		if (plugin.pendingPouchDiffs.isEmpty())
+		{
+			return;
+		}
+		Map<Integer, Integer> net = new HashMap<>(plugin.pendingPouchDiffs);
+		plugin.pendingPouchDiffs.clear();
+
+		if (plugin.session == null || plugin.client == null
+			|| plugin.isTrackingSuppressed() || plugin.isBankOrContainerOpen()
+			|| plugin.interfaceTracker.isShopOpen()
+			|| plugin.interfaceTracker.isNeedsRebaseline() || plugin.rebaselineGraceTicks > 0
+			|| plugin.deathTracker.isPending()
+			|| (plugin.pouchAbsorbBaselineTick >= 0
+				&& plugin.client.getTickCount() - plugin.pouchAbsorbBaselineTick <= 1))
+		{
+			return;
+		}
+
+		Map<Integer, Integer> gains = new HashMap<>();
+		Map<Integer, Integer> losses = new HashMap<>();
+		for (Map.Entry<Integer, Integer> entry : net.entrySet())
+		{
+			if (entry.getValue() > 0)
+			{
+				gains.put(entry.getKey(), entry.getValue());
+			}
+			else if (entry.getValue() < 0)
+			{
+				losses.put(entry.getKey(), -entry.getValue());
+			}
+		}
+		if (!gains.isEmpty() || !losses.isEmpty())
+		{
+			reconcileAndApplyDiff(gains, losses, Collections.emptyMap(), Collections.emptySet(), false);
+		}
+	}
+
+	private void reconcileAndApplyDiff(Map<Integer, Integer> rawGains, Map<Integer, Integer> rawLosses,
+		Map<Integer, Long> cannonReversals, Set<Integer> deferredRuneLosses, boolean cargoHoldDiff)
+	{
+		ItemContainer currentEquipContainer = plugin.client != null ? plugin.client.getItemContainer(InventoryID.WORN) : null;
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			plugin.recentlyUnequippedItems,
+			plugin.recentlyEquippedItems,
+			plugin.recentlyDroppedItems,
+			plugin.recentlyDroppedOwnedItems,
+			plugin.recentlyExpensedDrops,
+			plugin.previousEquipmentSnapshot,
+			currentEquipContainer,
+			plugin.session,
+			plugin.grandExchangeTracker,
+			plugin.itemManager,
+			plugin.config,
+			plugin.ignoredItemNames,
+			plugin.pendingWornAmmoExpenses,
+			plugin.matchedUnequipsThisTick
+		);
+		context.setBarrowsWearBookedByPiece(plugin.barrowsWearBookedByPiece);
+		context.setCargoHoldLoss(cargoHoldDiff);
+		int currentTick = plugin.client != null ? plugin.client.getTickCount() : 0;
+		Set<Integer> liveDropIntents = plugin.expireDropIntents(currentTick);
+		if (!liveDropIntents.isEmpty())
+		{
+			for (int lostId : rawLosses.keySet())
+			{
+				int canonicalLost = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostId) : lostId;
+				if (liveDropIntents.contains(canonicalLost))
+				{
+					context.getDropIntentIds().add(canonicalLost);
+					plugin.recentDropIntents.remove(canonicalLost);
+				}
+			}
+		}
+		Set<Integer> liveOpenIntents = plugin.expireOpenIntents(currentTick);
+		if (!liveOpenIntents.isEmpty())
+		{
+			for (int lostId : rawLosses.keySet())
+			{
+				int canonicalLost = plugin.itemManager != null ? plugin.itemManager.canonicalize(lostId) : lostId;
+				if (liveOpenIntents.contains(canonicalLost))
+				{
+					context.getOpenIntentIds().add(canonicalLost);
+					plugin.recentOpenIntents.remove(canonicalLost);
+				}
+			}
+		}
+		cannonReversals.forEach(context::addExpenseReversal);
+
+		if (plugin.client != null)
+		{
+			for (Map.Entry<Skill, Integer> entry : plugin.lastSkillXpTicks.entrySet())
+			{
+				int tick = entry.getValue();
+				if (tick == currentTick || tick == currentTick - 1)
+				{
+					context.addActiveSkillingSkill(entry.getKey());
+				}
+			}
+
+			boolean isFiremaking = plugin.lastTinderboxActionTick >= currentTick - 5 && plugin.lastTinderboxActionTick > 0
+				|| plugin.lastFiremakingAnimTick >= currentTick - 3 && plugin.lastFiremakingAnimTick > 0
+				|| plugin.lastFiremakingChatTick >= currentTick - 2 && plugin.lastFiremakingChatTick > 0;
+			if (!isFiremaking && plugin.client.getLocalPlayer() != null)
+			{
+				int anim = plugin.client.getLocalPlayer().getAnimation();
+				if (ActionClassifiers.isFiremakingAnimation(anim))
+				{
+					isFiremaking = true;
+					plugin.lastFiremakingAnimTick = currentTick;
+				}
+			}
+			if (isFiremaking)
+			{
+				context.addActiveSkillingSkill(Skill.FIREMAKING);
+			}
+
+			boolean isFarming = (plugin.lastFarmingActionTick >= currentTick - 8 && plugin.lastFarmingActionTick > 0)
+				|| (plugin.lastFarmingAnimTick >= currentTick - 2 && plugin.lastFarmingAnimTick > 0)
+				|| (plugin.lastFarmingChatTick >= currentTick - 2 && plugin.lastFarmingChatTick > 0);
+			if (!isFarming && plugin.client.getLocalPlayer() != null)
+			{
+				int anim = plugin.client.getLocalPlayer().getAnimation();
+				if (ActionClassifiers.isFarmingAnimation(anim))
+				{
+					isFarming = true;
+					plugin.lastFarmingAnimTick = currentTick;
+				}
+			}
+			if (isFarming)
+			{
+				context.addActiveSkillingSkill(Skill.FARMING);
+			}
+
+			boolean isAlchemy = (plugin.lastAlchActionTick >= currentTick - 3 && plugin.lastAlchActionTick > 0)
+				|| (plugin.lastAlchAnimTick >= currentTick - 3 && plugin.lastAlchAnimTick > 0)
+				|| (plugin.lastSkillXpTicks.containsKey(Skill.MAGIC) && plugin.lastSkillXpTicks.get(Skill.MAGIC) >= currentTick - 1);
+			if (!isAlchemy && plugin.client.getLocalPlayer() != null)
+			{
+				int anim = plugin.client.getLocalPlayer().getAnimation();
+				if (ActionClassifiers.isAlchemyAnimation(anim))
+				{
+					isAlchemy = true;
+					plugin.lastAlchAnimTick = currentTick;
+				}
+			}
+			if (isAlchemy)
+			{
+				context.setAlchemy(true);
+			}
+
+			// A deferred nature-rune pouch row is the same casting
+			// evidence a raw nature loss would be — let the alch
+			// handler still pair the cast.
+			if (deferredRuneLosses.contains(ItemID.NATURERUNE))
+			{
+				context.setAlchemy(true);
+			}
+
+			context.setNotingService(currentTick - plugin.lastNotingServiceTick <= 5);
+		}
+
+		context.setBlastFurnaceActive(plugin.blastFurnaceTracker.isActive());
+		plugin.reconciliationEngine.reconcile(context);
+
+		// Drain any remaining consumed equipped ammo/thrown weapons or crumbled
+		// jewelry into supply expenses
+		if (!plugin.pendingWornAmmoExpenses.isEmpty())
+		{
+			for (Map.Entry<Integer, Integer> entry : plugin.pendingWornAmmoExpenses.entrySet())
+			{
+				int itemId = entry.getKey();
+				int quantity = entry.getValue();
+				String itemName = plugin.getItemName(itemId);
+				long price = ItemPricing.priceOf(itemId, plugin.itemManager);
+				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
+				plugin.removeRecentlyUnequipped(itemId, quantity);
+			}
+			plugin.pendingWornAmmoExpenses.clear();
+		}
+
+		if (currentTick > 0)
+		{
+			for (int id : context.getRecentlyDroppedItems().keySet())
+			{
+				plugin.droppedItemTicks.put(id, currentTick);
+			}
+			for (int id : context.getRecentlyDroppedOwnedItems().keySet())
+			{
+				plugin.droppedItemTicks.put(id, currentTick);
+			}
+			for (int id : context.getRecentlyExpensedDrops().keySet())
+			{
+				plugin.droppedItemTicks.put(id, currentTick);
+			}
+		}
+
+		// Pop gold drop for the positive profit margin (if profitable and meets threshold)
+		if (context.getAlchedTotalMargin() > 0 && plugin.config.showGoldDrops() && plugin.goldDropOverlay != null
+			&& context.getAlchedTotalMargin() >= plugin.config.goldDropMinThreshold())
+		{
+			String dropText = "+" + QuantityFormatter.quantityToStackSize(context.getAlchedTotalMargin()) + " gp";
+			plugin.goldDropOverlay.addDrop(dropText, context.getAlchedItemRawId(), 0);
+		}
+
+		if (!context.getRawGains().isEmpty() || !context.getDroppedGainsDeductions().isEmpty()
+			|| !context.getSupplyExpenses().isEmpty() || !context.getExpenseReversals().isEmpty()
+			|| !context.getConsumedSessionQuantities().isEmpty())
+		{
+			plugin.session = plugin.session.markConsumed(context.getConsumedSessionQuantities());
+			plugin.session = plugin.session.withExpenseReversal(context.getExpenseReversals());
+			plugin.processGainsLossesAndExpenses(
+				context.getRawGains(),
+				context.getDroppedGainsDeductions(),
+				context.getSupplyExpenses(),
+				context.getAlchedDropItemId(),
+				context.getExemptProductIds(),
+				context.getBasisExcludedExpenseIds()
+			);
+
+			if (context.getActiveSkillingSkills().contains(Skill.FIREMAKING))
+			{
+				plugin.lastTinderboxActionTick = -100;
+			}
+			if (context.getActiveSkillingSkills().contains(Skill.FARMING))
+			{
+				plugin.lastFarmingActionTick = -100;
+				plugin.lastFarmingAnimTick = -100;
+				plugin.lastFarmingChatTick = -100;
+			}
+		}
 	}
 
 	void onVarbitChanged(VarbitChanged event)
@@ -893,6 +1042,16 @@ final class InventoryDiffProcessor
 		}
 
 		int varbitId = event.getVarbitId();
+
+		// The boat hold joins/leaves the merged snapshot with the spawned
+		// state — absorb the transition so spawn/despawn never books the
+		// hold's contents as a phantom gain or loss.
+		if (varbitId == VarbitID.SAILING_BOAT_SPAWNED)
+		{
+			plugin.rebaselineGraceTicks = Math.max(plugin.rebaselineGraceTicks, 3);
+			plugin.setNeedsRebaseline(true);
+		}
+
 		if (plugin.blastFurnaceTracker.isActive()
 			&& BlastFurnaceHandler.DISPENSER_VARBIT_TO_BAR.containsKey(varbitId)
 			&& !plugin.invalidVarbitIds.contains(varbitId))

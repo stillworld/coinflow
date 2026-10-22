@@ -34,6 +34,10 @@ final class SessionLifecycleManager
 		GameState state = event.getGameState();
 		plugin.interfaceTracker.onGameStateChanged(state, plugin.snapshotInitialized);
 		plugin.blastFurnaceTracker.onGameStateChanged(state);
+		if (state == GameState.LOGGING_IN || state == GameState.HOPPING)
+		{
+			plugin.activityMonitor.onLoginStarted();
+		}
 
 		if (state == GameState.LOGGED_IN)
 		{
@@ -291,6 +295,8 @@ final class SessionLifecycleManager
 		plugin.containerPickupTracker.resetTransient();
 		plugin.matchedUnequipsThisTick.clear();
 		plugin.pendingWornAmmoExpenses.clear();
+		plugin.pendingPouchDiffs.clear();
+		plugin.pouchAbsorbBaselineTick = -1;
 		plugin.pendingBarrowsWear.clear();
 		plugin.barrowsSwapBasesThisTick.clear();
 		plugin.weaponChargeTracker.reset();
@@ -360,6 +366,7 @@ final class SessionLifecycleManager
 		plugin.deathTracker.reset();
 		plugin.cannonTracker.reset();
 		plugin.blastFurnaceTracker.resetSession();
+		plugin.activityTimeline.reset();
 		if (plugin.client != null && plugin.client.getGameState() == GameState.LOGGED_IN)
 		{
 			plugin.grandExchangeTracker.seed(plugin.client.getGrandExchangeOffers());
@@ -425,14 +432,20 @@ final class SessionLifecycleManager
 	/**
 	 * Post-removal bookkeeping: drop stale pending-drop ledgers for the item
 	 * (a pickup of a removed row must never reverse an expense or restore a
-	 * deduction that no longer exists), re-arm the goal notification if the
-	 * removal dropped profit below the target, and refresh the panel.
+	 * deduction that no longer exists), rebase the activity timeline so a
+	 * deleted row isn't booked as a loss against the live segment, re-arm the
+	 * goal notification if the removal dropped profit below the target, and
+	 * refresh the panel.
 	 */
 	private void afterSessionItemRemoval(int itemId)
 	{
 		plugin.recentlyDroppedItems.remove(itemId);
 		plugin.recentlyDroppedOwnedItems.remove(itemId);
 		plugin.recentlyExpensedDrops.remove(itemId);
+
+		// The session totals changed without an activity — resync the timeline's
+		// baselines so the removal isn't attributed to whatever segment is live.
+		plugin.activityTimeline.rebase(plugin.session.getGrossProfit(), plugin.session.getTotalExpenses());
 
 		long goalAmount = CoinFlowSession.parseGoalAmount(plugin.config != null ? plugin.config.goalAmount() : null);
 		if (goalAmount > 0 && plugin.session != null)

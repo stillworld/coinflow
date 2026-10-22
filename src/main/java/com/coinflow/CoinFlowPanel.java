@@ -7,6 +7,7 @@ import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Graphics;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -19,7 +20,10 @@ import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.awt.image.BufferedImage;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.inject.Inject;
@@ -43,6 +47,7 @@ import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DocumentFilter;
+import net.runelite.api.Skill;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.ItemManager;
@@ -116,6 +121,16 @@ public class CoinFlowPanel extends PluginPanel
 	private final JButton setGoalButton = new JButton("Set Goal");
 	private final JButton cancelEditButton = new JButton("Cancel");
 
+	// ── Activity Timeline UI Components ──────────────────────────────────
+	private final JPanel timelineCard = new JPanel();
+	private final JLabel timelineCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
+	final JPanel timelineContainer = new JPanel();
+	/** Retained labels of the live segment row so per-tick updates need no rebuild. */
+	private final List<ActivityRow> activityRows = new ArrayList<>();
+	private final Map<Skill, ImageIcon> skillIcons = new EnumMap<>(Skill.class);
+	/** Timeline vs Totals view; a field (like itemFilter) so it doesn't churn persisted settings. */
+	boolean timelineTotalsView = false;
+
 	// ── Item Breakdown UI Components ─────────────────────────────────────
 	private final JPanel itemsCard = new JPanel();
 	private final JLabel itemsCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
@@ -141,6 +156,9 @@ public class CoinFlowPanel extends PluginPanel
 	private boolean lastItemsCardCollapsed = false;
 	private boolean lastShowItemBreakdown = true;
 	private boolean lastTrackSpent = true;
+	private boolean lastTimelineCardCollapsed = false;
+	private boolean lastShowTimeline = true;
+	private int lastTimelineRevision = -1;
 	private Map<Integer, CoinFlowSession.TrackedItem> lastRenderedItems = null;
 	private Map<Integer, CoinFlowSession.TrackedItem> lastRenderedExpenses = null;
 
@@ -211,7 +229,12 @@ public class CoinFlowPanel extends PluginPanel
 		add(goalCard, c);
 		c.gridy++;
 
-		// 4. Item Breakdown Card
+		// 4. Activity Timeline Card
+		c.insets = new Insets(0, 0, 10, 0);
+		add(timelineCard, c);
+		c.gridy++;
+
+		// 5. Item Breakdown Card
 		c.insets = new Insets(0, 0, 0, 0);
 		add(itemsCard, c);
 		c.gridy++;
@@ -261,6 +284,7 @@ public class CoinFlowPanel extends PluginPanel
 			refreshHeaderPanel();
 			refreshSessionCardView();
 			refreshGoalCardView();
+			refreshTimelineCardView();
 			refreshItemsCardView();
 			CoinFlowSession session = plugin.getSession();
 			if (session != null)
@@ -834,6 +858,596 @@ public class CoinFlowPanel extends PluginPanel
 		}
 	}
 
+	// ── Activity Timeline Card ───────────────────────────────────────────
+
+	/** Max segment rows rendered; earlier ones collapse into a footer count. */
+	private static final int MAX_SEGMENT_ROWS = 10;
+
+	void refreshTimelineCardView()
+	{
+		timelineCard.removeAll();
+		timelineCard.setLayout(new GridBagLayout());
+		timelineCard.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		activityRows.clear();
+
+		boolean show = config.showTimeline() && plugin.activityTimeline != null;
+		lastShowTimeline = show;
+		lastTimelineRevision = plugin.activityTimeline != null ? plugin.activityTimeline.getRevision() : -1;
+		timelineCard.setVisible(show);
+		if (!show)
+		{
+			timelineCard.revalidate();
+			timelineCard.repaint();
+			return;
+		}
+
+		boolean compact = config.compactMode();
+		boolean collapsed = config.timelineCardCollapsed();
+		boolean trackSpent = config.trackSpent();
+		lastTimelineCardCollapsed = collapsed;
+
+		timelineCard.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(1, 1, 1, 1, ColorScheme.DARK_GRAY_HOVER_COLOR),
+			new EmptyBorder(compact ? 6 : 8, compact ? 6 : 8, compact ? 6 : 8, compact ? 6 : 8)
+		));
+
+		GridBagConstraints c = new GridBagConstraints();
+		c.fill = GridBagConstraints.HORIZONTAL;
+		c.weightx = 1.0;
+		c.gridx = 0;
+		c.gridy = 0;
+
+		List<ActivityTimeline.Segment> segments = plugin.activityTimeline != null
+			? plugin.activityTimeline.getSegments() : Collections.emptyList();
+		ActivityTimeline.Segment current = segments.isEmpty() ? null : segments.get(segments.size() - 1);
+
+		timelineCollapsedPreviewLabel.setFont(FontManager.getRunescapeSmallFont());
+		timelineCollapsedPreviewLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		timelineCollapsedPreviewLabel.setText(current != null ? current.label : "No activity");
+
+		JPanel headerRow = buildCardHeaderRow("Profit by Activity",
+			"<html>GP earned and spent, split by what you were doing<br>"
+				+ "(each monster, skill, bank trip). The highlighted row is what you're doing now.<br>"
+				+ "Timeline: each stint, newest first. Totals: everything summed per activity.</html>",
+			collapsed, timelineCollapsedPreviewLabel, () -> {
+			boolean next = !config.timelineCardCollapsed();
+			configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "timelineCardCollapsed", next);
+			refreshTimelineCardView();
+			CoinFlowSession s = plugin.getSession();
+			if (s != null)
+			{
+				updateSessionUI(s);
+			}
+		});
+
+		c.insets = new Insets(0, 0, collapsed ? 0 : (compact ? 6 : 8), 0);
+		timelineCard.add(headerRow, c);
+		c.gridy++;
+
+		if (!collapsed)
+		{
+			timelineContainer.removeAll();
+			timelineContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+
+			if (segments.isEmpty())
+			{
+				timelineContainer.setLayout(new BorderLayout());
+				JLabel emptyLabel = new JLabel("<html><div style='text-align:center'>No activity yet<br>"
+					+ "Fight, skill, or bank to see<br>the GP from each activity.</div></html>", SwingConstants.CENTER);
+				emptyLabel.setFont(FontManager.getRunescapeSmallFont());
+				emptyLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				emptyLabel.setBorder(new EmptyBorder(compact ? 4 : 8, 0, compact ? 4 : 8, 0));
+				timelineContainer.add(emptyLabel, BorderLayout.CENTER);
+			}
+			else
+			{
+				timelineContainer.setLayout(new DynamicGridLayout(0, 1, 0, compact ? 2 : 4));
+				timelineContainer.add(buildTimelineViewBar());
+
+				List<RowStats> stats = currentRowStats(segments);
+				long totalSecs = totalSeconds(stats);
+				int shown = Math.min(stats.size(), MAX_SEGMENT_ROWS);
+				for (int i = 0; i < shown; i++)
+				{
+					timelineContainer.add(buildActivityRow(stats.get(i), compact, trackSpent, totalSecs));
+				}
+				int hidden = stats.size() - shown;
+				if (hidden > 0)
+				{
+					String noun = hidden == 1 ? "activity" : "activities";
+					JLabel moreLabel = new JLabel(timelineTotalsView
+						? "+" + hidden + " more " + noun
+						: "+" + hidden + " earlier " + noun, SwingConstants.CENTER);
+					moreLabel.setFont(FontManager.getRunescapeSmallFont());
+					moreLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+					timelineContainer.add(moreLabel);
+				}
+			}
+
+			c.insets = new Insets(0, 0, 0, 0);
+			timelineCard.add(timelineContainer, c);
+			c.gridy++;
+		}
+
+		timelineCard.revalidate();
+		timelineCard.repaint();
+		revalidate();
+		repaint();
+	}
+
+	private JPanel buildTimelineViewBar()
+	{
+		JPanel bar = new JPanel(new GridLayout(1, 2, 4, 0));
+		bar.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		bar.setPreferredSize(new Dimension(0, 20));
+		bar.add(buildTimelineViewButton("Timeline", false,
+			"Each stint as its own row, newest first"));
+		bar.add(buildTimelineViewButton("Totals", true,
+			"All stints of the same activity summed into one row, longest first"));
+		return bar;
+	}
+
+	private JButton buildTimelineViewButton(String label, boolean totals, String tooltip)
+	{
+		JButton btn = new JButton(label);
+		styleButton(btn);
+		boolean active = timelineTotalsView == totals;
+		btn.setForeground(active ? ACCENT_GOLD : ColorScheme.LIGHT_GRAY_COLOR);
+		btn.setFont(active ? FontManager.getRunescapeFont() : FontManager.getRunescapeSmallFont());
+		btn.setToolTipText(tooltip);
+		btn.addActionListener(e -> {
+			if (timelineTotalsView != totals)
+			{
+				timelineTotalsView = totals;
+				refreshTimelineCardView();
+			}
+		});
+		return btn;
+	}
+
+	/**
+	 * Display rows for the active view, in display order: timeline is the
+	 * segment list newest-first; totals collapses same-activity segments
+	 * (longest total time first). The live flag marks the row containing the
+	 * current segment.
+	 */
+	private List<RowStats> currentRowStats(List<ActivityTimeline.Segment> segments)
+	{
+		List<RowStats> rows = new ArrayList<>();
+		if (segments.isEmpty())
+		{
+			return rows;
+		}
+		ActivityTimeline.Segment current = segments.get(segments.size() - 1);
+		if (!timelineTotalsView)
+		{
+			for (int i = segments.size() - 1; i >= 0; i--)
+			{
+				rows.add(RowStats.of(segments.get(i), i == segments.size() - 1));
+			}
+			return rows;
+		}
+
+		Map<String, Integer> visits = new HashMap<>();
+		for (ActivityTimeline.Segment seg : segments)
+		{
+			visits.merge(RowStats.key(seg.kind, seg.label), 1, Integer::sum);
+		}
+		String liveKey = RowStats.key(current.kind, current.label);
+		for (ActivityTimeline.Aggregate agg : plugin.activityTimeline.aggregateByLabel())
+		{
+			String key = RowStats.key(agg.kind, agg.label);
+			rows.add(RowStats.of(agg, visits.getOrDefault(key, 1), key.equals(liveKey)));
+		}
+		return rows;
+	}
+
+	private static long totalSeconds(List<RowStats> rows)
+	{
+		long secs = 0;
+		for (RowStats r : rows)
+		{
+			secs += r.totalTime.getSeconds();
+		}
+		return secs;
+	}
+
+	private static double timeShare(RowStats stats, long totalSecs)
+	{
+		return totalSecs > 0 ? Math.min(1.0, (double) stats.totalTime.getSeconds() / totalSecs) : 0;
+	}
+
+	private JPanel buildActivityRow(RowStats stats, boolean compact, boolean trackSpent, long totalSecs)
+	{
+		Color kindColor = kindColor(stats.kind);
+		ShareBarPanel row = new ShareBarPanel(new BorderLayout(compact ? 4 : 6, 0),
+			new Color(kindColor.getRed(), kindColor.getGreen(), kindColor.getBlue(), SHARE_BAR_ALPHA));
+		row.setBackground(stats.live ? ColorScheme.DARK_GRAY_COLOR : ColorScheme.DARKER_GRAY_COLOR);
+		row.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, KIND_STRIPE_WIDTH, 0, 0, kindColor),
+			new EmptyBorder(compact ? 2 : 3, compact ? 3 : 4, compact ? 2 : 3, compact ? 3 : 4)));
+		row.setShare(timeShare(stats, totalSecs));
+
+		JLabel iconLabel = new JLabel(activityIcon(stats.kind, stats.label));
+		iconLabel.setPreferredSize(new Dimension(ACTIVITY_ICON_SIZE, 0));
+		row.add(iconLabel, BorderLayout.WEST);
+
+		JPanel textPanel = new JPanel(new GridLayout(compact ? 1 : 2, 1, 0, 1));
+		textPanel.setOpaque(false);
+
+		JLabel nameLabel = new JLabel(stats.label);
+		nameLabel.setFont(compact ? FontManager.getRunescapeSmallFont() : FontManager.getRunescapeFont());
+		nameLabel.setForeground(stats.live ? Color.WHITE : ColorScheme.LIGHT_GRAY_COLOR);
+		textPanel.add(nameLabel);
+
+		boolean includeAfk = config.includeAfkTime();
+		JLabel detailLabel = null;
+		if (!compact)
+		{
+			detailLabel = new JLabel(activityDetailText(stats, includeAfk));
+			detailLabel.setFont(FontManager.getRunescapeSmallFont());
+			detailLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			textPanel.add(detailLabel);
+		}
+		row.add(textPanel, BorderLayout.CENTER);
+
+		JLabel valueLabel = new JLabel(formatSegmentNet(stats.net()), SwingConstants.RIGHT);
+		valueLabel.setFont(compact ? FontManager.getRunescapeSmallFont() : FontManager.getRunescapeFont());
+		valueLabel.setForeground(segmentNetColor(stats.net()));
+		row.add(valueLabel, BorderLayout.EAST);
+
+		row.setToolTipText(activityTooltip(stats, trackSpent, includeAfk, totalSecs));
+		activityRows.add(new ActivityRow(stats.key(), row, detailLabel, valueLabel));
+		return row;
+	}
+
+	/**
+	 * Segments shorter than this show no gp/hr: a 1-minute bank trip
+	 * extrapolates to absurd hourly rates that read as noise.
+	 */
+	private static final long MIN_RATE_SECONDS = 120;
+	private static final int KIND_STRIPE_WIDTH = 3;
+	private static final int ACTIVITY_ICON_SIZE = 16;
+	private static final int SHARE_BAR_ALPHA = 34;
+
+	private static Color kindColor(ActivityTimeline.Kind kind)
+	{
+		switch (kind)
+		{
+			case COMBAT:
+				return new Color(0xC8, 0x46, 0x3C);
+			case SKILLING:
+				return new Color(0x46, 0xA8, 0x5A);
+			case BLAST_FURNACE:
+				return new Color(0xD8, 0x8A, 0x2C);
+			case BANKING:
+				return new Color(0x4C, 0x8C, 0xC8);
+			default:
+				return ColorScheme.MEDIUM_GRAY_COLOR;
+		}
+	}
+
+	/**
+	 * Skill icon for the row: the trained skill for skilling, Attack's sword
+	 * for combat, Smithing for Blast Furnace. Banking/AFK/Other get none (the
+	 * label column still reserves the icon width so names stay aligned).
+	 */
+	private ImageIcon activityIcon(ActivityTimeline.Kind kind, String label)
+	{
+		Skill skill;
+		switch (kind)
+		{
+			case COMBAT:
+				skill = Skill.ATTACK;
+				break;
+			case BLAST_FURNACE:
+				skill = Skill.SMITHING;
+				break;
+			case SKILLING:
+				skill = skillByName(label);
+				break;
+			default:
+				skill = null;
+		}
+		if (skill == null || plugin.skillIconManager == null)
+		{
+			return null;
+		}
+		return skillIcons.computeIfAbsent(skill, s -> {
+			BufferedImage img = plugin.skillIconManager.getSkillImage(s, true);
+			return img != null ? new ImageIcon(ImageUtil.resizeImage(img, ACTIVITY_ICON_SIZE, ACTIVITY_ICON_SIZE)) : null;
+		});
+	}
+
+	private static Skill skillByName(String name)
+	{
+		for (Skill skill : Skill.values())
+		{
+			if (skill.getName().equals(name))
+			{
+				return skill;
+			}
+		}
+		return null;
+	}
+
+	/** Banking/AFK rows never show a rate — an hourly figure for either is meaningless. */
+	private static boolean showsRate(RowStats stats)
+	{
+		return stats.kind != ActivityTimeline.Kind.BANKING && stats.kind != ActivityTimeline.Kind.AFK
+			&& stats.totalTime.getSeconds() >= MIN_RATE_SECONDS;
+	}
+
+	private static String formatSegmentNet(long net)
+	{
+		if (net == 0)
+		{
+			return "0 gp";
+		}
+		return (net < 0 ? "-" : "+") + QuantityFormatter.formatNumber(Math.abs(net)) + " gp";
+	}
+
+	private static Color segmentNetColor(long net)
+	{
+		if (net == 0)
+		{
+			return ColorScheme.LIGHT_GRAY_COLOR;
+		}
+		return net > 0 ? PROFIT_GREEN : WARN_ORANGE;
+	}
+
+	/**
+	 * One-line row detail, most useful figure first so the label's tail
+	 * truncation only ever drops the least important part: combat leads with
+	 * kills and gp/kill (gp/hr lives in the tooltip), other activities show
+	 * gp/hr only once the row is long enough for the rate to mean anything.
+	 */
+	private static String activityDetailText(RowStats stats, boolean includeAfk)
+	{
+		StringBuilder sb = new StringBuilder(formatDuration(stats.totalTime));
+		if (stats.kind == ActivityTimeline.Kind.COMBAT && stats.kills > 0)
+		{
+			sb.append(" · ").append(stats.kills).append(stats.kills == 1 ? " kill" : " kills")
+				.append(" · ").append(QuantityFormatter.quantityToStackSize(stats.netPerKill())).append("/kill");
+		}
+		else if (showsRate(stats))
+		{
+			sb.append(" · ").append(QuantityFormatter.quantityToStackSize(stats.gpPerHour(includeAfk))).append(" gp/hr");
+		}
+		return sb.toString();
+	}
+
+	/** Full breakdown on hover — everything the one-line detail has to leave out. */
+	private static String activityTooltip(RowStats stats, boolean trackSpent, boolean includeAfk, long totalSecs)
+	{
+		StringBuilder sb = new StringBuilder("<html><b>").append(stats.label).append("</b>");
+		if (stats.live)
+		{
+			sb.append(" (now)");
+		}
+		sb.append("<br>Time: ").append(formatDuration(stats.totalTime));
+		if (stats.activeTime.compareTo(stats.totalTime) < 0)
+		{
+			sb.append(" (").append(formatDuration(stats.activeTime)).append(" active)");
+		}
+		sb.append(", ").append(Math.round(timeShare(stats, totalSecs) * 100)).append("% of session");
+		if (stats.visits > 1)
+		{
+			sb.append("<br>Stints: ").append(stats.visits);
+		}
+		sb.append("<br>Earned: ").append(QuantityFormatter.formatNumber(stats.gross)).append(" gp");
+		if (trackSpent)
+		{
+			sb.append("<br>Spent: ").append(QuantityFormatter.formatNumber(stats.expenses)).append(" gp");
+		}
+		sb.append("<br>Net: ").append(formatSegmentNet(stats.net()));
+		if (showsRate(stats))
+		{
+			sb.append("<br>Rate: ").append(QuantityFormatter.quantityToStackSize(stats.gpPerHour(includeAfk))).append(" gp/hr");
+		}
+		if (stats.kind == ActivityTimeline.Kind.COMBAT && stats.kills > 0)
+		{
+			sb.append("<br>Kills: ").append(stats.kills)
+				.append(" (").append(stats.killsPerHour(includeAfk)).append("/hr)")
+				.append("<br>Per kill: ").append(QuantityFormatter.quantityToStackSize(stats.netPerKill())).append(" gp net");
+			if (trackSpent && stats.expenses > 0)
+			{
+				sb.append(", ").append(QuantityFormatter.quantityToStackSize(stats.expensesPerKill())).append(" gp supplies");
+			}
+		}
+		return sb.append("</html>").toString();
+	}
+
+	/**
+	 * Per-tick refresh of the rendered rows' numbers, tooltips and share bars
+	 * plus the collapsed preview — no structural rebuild, which only happens
+	 * when the timeline revision changes. Rows match by activity key (totals
+	 * re-sorts by time, so position isn't stable there) or by position in the
+	 * timeline view, where duplicate keys are expected.
+	 */
+	private void updateLiveSegmentRow()
+	{
+		if (plugin.activityTimeline == null)
+		{
+			return;
+		}
+		List<ActivityTimeline.Segment> segments = plugin.activityTimeline.getSegments();
+		if (segments.isEmpty())
+		{
+			return;
+		}
+		timelineCollapsedPreviewLabel.setText(segments.get(segments.size() - 1).label);
+		if (activityRows.isEmpty())
+		{
+			return;
+		}
+
+		List<RowStats> stats = currentRowStats(segments);
+		long totalSecs = totalSeconds(stats);
+		Map<String, RowStats> byKey = new HashMap<>();
+		if (timelineTotalsView)
+		{
+			for (RowStats s : stats)
+			{
+				byKey.put(s.key(), s);
+			}
+		}
+		boolean includeAfk = config.includeAfkTime();
+		boolean trackSpent = config.trackSpent();
+		for (int i = 0; i < activityRows.size(); i++)
+		{
+			ActivityRow row = activityRows.get(i);
+			RowStats s = timelineTotalsView ? byKey.get(row.key) : (i < stats.size() ? stats.get(i) : null);
+			if (s == null || !s.key().equals(row.key))
+			{
+				continue;
+			}
+			row.valueLabel.setText(formatSegmentNet(s.net()));
+			row.valueLabel.setForeground(segmentNetColor(s.net()));
+			if (row.detailLabel != null)
+			{
+				row.detailLabel.setText(activityDetailText(s, includeAfk));
+			}
+			row.panel.setToolTipText(activityTooltip(s, trackSpent, includeAfk, totalSecs));
+			row.panel.setShare(timeShare(s, totalSecs));
+		}
+	}
+
+	/** View model shared by the timeline (one segment) and totals (one aggregate) rows. */
+	private static final class RowStats
+	{
+		final ActivityTimeline.Kind kind;
+		final String label;
+		final Duration activeTime;
+		final Duration totalTime;
+		final long gross;
+		final long expenses;
+		final int kills;
+		final int visits;
+		final boolean live;
+
+		private RowStats(ActivityTimeline.Kind kind, String label, Duration activeTime, Duration totalTime,
+			long gross, long expenses, int kills, int visits, boolean live)
+		{
+			this.kind = kind;
+			this.label = label;
+			this.activeTime = activeTime;
+			this.totalTime = totalTime;
+			this.gross = gross;
+			this.expenses = expenses;
+			this.kills = kills;
+			this.visits = visits;
+			this.live = live;
+		}
+
+		static RowStats of(ActivityTimeline.Segment s, boolean live)
+		{
+			return new RowStats(s.kind, s.label, s.activeTime, s.totalTime, s.gross, s.expenses, s.kills, 1, live);
+		}
+
+		static RowStats of(ActivityTimeline.Aggregate a, int visits, boolean live)
+		{
+			return new RowStats(a.kind, a.label, a.activeTime, a.totalTime, a.gross, a.expenses, a.kills, visits, live);
+		}
+
+		static String key(ActivityTimeline.Kind kind, String label)
+		{
+			return kind + "|" + label;
+		}
+
+		String key()
+		{
+			return key(kind, label);
+		}
+
+		long net()
+		{
+			return gross - expenses;
+		}
+
+		private long effectiveSeconds(boolean includeAfk)
+		{
+			return (includeAfk ? totalTime : activeTime).getSeconds();
+		}
+
+		long gpPerHour(boolean includeAfk)
+		{
+			long secs = effectiveSeconds(includeAfk);
+			return secs > 0 ? net() * 3600 / secs : 0;
+		}
+
+		long killsPerHour(boolean includeAfk)
+		{
+			long secs = effectiveSeconds(includeAfk);
+			return secs > 0 ? kills * 3600L / secs : 0;
+		}
+
+		long netPerKill()
+		{
+			return kills > 0 ? net() / kills : 0;
+		}
+
+		long expensesPerKill()
+		{
+			return kills > 0 ? expenses / kills : 0;
+		}
+	}
+
+	/** A rendered row plus the labels the per-tick refresh rewrites in place. */
+	private static final class ActivityRow
+	{
+		final String key;
+		final ShareBarPanel panel;
+		final JLabel detailLabel;
+		final JLabel valueLabel;
+
+		ActivityRow(String key, ShareBarPanel panel, JLabel detailLabel, JLabel valueLabel)
+		{
+			this.key = key;
+			this.panel = panel;
+			this.detailLabel = detailLabel;
+			this.valueLabel = valueLabel;
+		}
+	}
+
+	/**
+	 * Row background with a faint bar filled to the activity's share of
+	 * session time, tinted by activity kind — where the time went, readable
+	 * without parsing any numbers.
+	 */
+	private static final class ShareBarPanel extends JPanel
+	{
+		private final Color barColor;
+		private double share;
+
+		ShareBarPanel(java.awt.LayoutManager layout, Color barColor)
+		{
+			super(layout);
+			this.barColor = barColor;
+		}
+
+		void setShare(double share)
+		{
+			if (Math.abs(this.share - share) > 0.001)
+			{
+				this.share = share;
+				repaint();
+			}
+		}
+
+		@Override
+		protected void paintComponent(Graphics g)
+		{
+			super.paintComponent(g);
+			int barWidth = (int) Math.round((getWidth() - KIND_STRIPE_WIDTH) * share);
+			if (barWidth > 0)
+			{
+				g.setColor(barColor);
+				g.fillRect(KIND_STRIPE_WIDTH, 0, barWidth, getHeight());
+			}
+		}
+	}
+
 	void refreshItemsCardView()
 	{
 		itemsCard.removeAll();
@@ -1162,6 +1776,11 @@ public class CoinFlowPanel extends PluginPanel
 
 	private JPanel buildCardHeaderRow(String titleText, boolean collapsed, JLabel previewLabel, Runnable onToggle)
 	{
+		return buildCardHeaderRow(titleText, null, collapsed, previewLabel, onToggle);
+	}
+
+	private JPanel buildCardHeaderRow(String titleText, String titleTooltip, boolean collapsed, JLabel previewLabel, Runnable onToggle)
+	{
 		JPanel headerRow = new JPanel(new BorderLayout(6, 0));
 		headerRow.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		headerRow.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
@@ -1169,6 +1788,11 @@ public class CoinFlowPanel extends PluginPanel
 		JLabel titleLabel = new JLabel(titleText);
 		titleLabel.setFont(FontManager.getRunescapeBoldFont());
 		titleLabel.setForeground(ACCENT_GOLD);
+		if (titleTooltip != null)
+		{
+			titleLabel.setToolTipText(titleTooltip);
+			headerRow.setToolTipText(titleTooltip);
+		}
 
 		JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
 		rightPanel.setOpaque(false);
@@ -1178,7 +1802,7 @@ public class CoinFlowPanel extends PluginPanel
 			rightPanel.add(previewLabel);
 		}
 
-		JLabel chevron = new JLabel(collapsed ? "▶" : "▼");
+		JLabel chevron = new JLabel(collapsed ? ">" : "v");
 		chevron.setFont(FontManager.getRunescapeSmallFont());
 		chevron.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		rightPanel.add(chevron);
@@ -1282,7 +1906,8 @@ public class CoinFlowPanel extends PluginPanel
 
 	void openSessionSummary(CoinFlowSession session)
 	{
-		SessionSummaryDialog.showDialog(this, session, config != null && config.trackSpent(), () -> plugin.resetSession());
+		SessionSummaryDialog.showDialog(this, session, config != null && config.trackSpent(),
+			plugin.activityTimeline, config != null && config.includeAfkTime(), () -> plugin.resetSession());
 	}
 
 	private void buildGoalSetupSubpanel()
@@ -1525,6 +2150,29 @@ public class CoinFlowPanel extends PluginPanel
 			goalCollapsedPreviewLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		}
 
+		// Activity timeline card: structural rebuild only when the segment
+		// list changes or display config flipped; otherwise update the live
+		// row's labels in place.
+		boolean showTimeline = config.showTimeline() && plugin.activityTimeline != null;
+		boolean timelineCollapsed = config.timelineCardCollapsed();
+		int timelineRevision = plugin.activityTimeline != null ? plugin.activityTimeline.getRevision() : -1;
+		if (showTimeline != lastShowTimeline || timelineCollapsed != lastTimelineCardCollapsed
+			|| timelineRevision != lastTimelineRevision || compactChanged || trackSpentChanged)
+		{
+			lastShowTimeline = showTimeline;
+			lastTimelineCardCollapsed = timelineCollapsed;
+			refreshTimelineCardView();
+		}
+		else if (showTimeline && !timelineCollapsed)
+		{
+			updateLiveSegmentRow();
+		}
+		else if (showTimeline)
+		{
+			ActivityTimeline.Segment cur = plugin.activityTimeline.getCurrentSegment();
+			timelineCollapsedPreviewLabel.setText(cur != null ? cur.label : "No activity");
+		}
+
 		// Item breakdown card
 		boolean showBreakdown = config.showItemBreakdown();
 		boolean itemsCollapsed = config.itemsCardCollapsed();
@@ -1595,6 +2243,7 @@ public class CoinFlowPanel extends PluginPanel
 			refreshHeaderPanel();
 			refreshSessionCardView();
 			refreshGoalCardView();
+			refreshTimelineCardView();
 			refreshItemsCardView();
 			CoinFlowSession session = plugin.getSession();
 			if (session != null)
@@ -1612,6 +2261,7 @@ public class CoinFlowPanel extends PluginPanel
 			refreshHeaderPanel();
 			refreshSessionCardView();
 			refreshGoalCardView();
+			refreshTimelineCardView();
 			refreshItemsCardView();
 			CoinFlowSession session = plugin.getSession();
 			if (session != null)

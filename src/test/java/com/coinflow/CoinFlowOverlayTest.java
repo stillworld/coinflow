@@ -243,6 +243,27 @@ public class CoinFlowOverlayTest
 	}
 
 	@Test
+	public void render_singleLineNet_showsNetProfit()
+	{
+		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE_NET);
+		when(config.trackSpent()).thenReturn(true);
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(Collections.singletonMap(1, new CoinFlowSession.TrackedItem(1, "Shark", 10, 1000L)))
+			.withExpenses(Collections.singletonMap(2, new CoinFlowSession.TrackedItem(2, "Prayer potion(4)", 1, 2000L)));
+		when(plugin.getSession()).thenReturn(session);
+
+		overlay.setClearChildren(false);
+		overlay.render(graphics);
+		Assert.assertEquals(1, overlay.getPanelComponent().getChildren().size());
+		// PanelComponent returns the size measured on the previous pass.
+		Dimension result = overlay.render(graphics);
+		Assert.assertNotNull(result);
+		String expectedText = CoinFlowOverlay.formatCompactNetProfit(session.getTotalProfit());
+		Assert.assertEquals("Net-profit line must size to the net text, not the gp/hr text",
+			graphics.getFontMetrics().stringWidth(expectedText) + 16, result.width);
+	}
+
+	@Test
 	public void render_singleLine_hiddenWhenShowOverlayFalse()
 	{
 		when(config.overlayStyle()).thenReturn(CoinFlowConfig.OverlayStyle.SINGLE_LINE);

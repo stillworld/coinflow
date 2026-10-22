@@ -99,7 +99,7 @@ public class CoinFlowOverlay extends OverlayPanel
 
 		try
 		{
-			boolean singleLine = config.overlayStyle() == CoinFlowConfig.OverlayStyle.SINGLE_LINE;
+			boolean singleLine = config.overlayStyle() != CoinFlowConfig.OverlayStyle.DETAILED;
 			// A resized overlay's saved size is ignored in single-line mode, so hide the resize handles.
 			setResizable(!singleLine);
 			if (singleLine)
@@ -247,9 +247,20 @@ public class CoinFlowOverlay extends OverlayPanel
 	 */
 	private Dimension renderSingleLine(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk, boolean compact)
 	{
-		long gpPerHour = config.trackSpent() ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
-		String text = formatCompactGpPerHour(gpPerHour);
-		Color color = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
+		String text;
+		Color color;
+		if (config.overlayStyle() == CoinFlowConfig.OverlayStyle.SINGLE_LINE_NET)
+		{
+			long net = config.trackSpent() ? session.getTotalProfit() : session.getGrossProfit();
+			text = formatCompactNetProfit(net);
+			color = net < 0 ? LOSS_COLOR : PROFIT_COLOR;
+		}
+		else
+		{
+			long gpPerHour = config.trackSpent() ? session.getGpPerHour(includeAfk) : session.getGrossGpPerHour(includeAfk);
+			text = formatCompactGpPerHour(gpPerHour);
+			color = isIdle ? IDLE_COLOR : (gpPerHour < 0 ? LOSS_COLOR : PROFIT_COLOR);
+		}
 
 		FontMetrics fontMetrics = graphics.getFontMetrics();
 		panelComponent.setPreferredSize(new Dimension(fontMetrics.stringWidth(text) + (compact ? COMPACT_PANEL_PADDING : PANEL_PADDING), 0));
@@ -284,6 +295,14 @@ public class CoinFlowOverlay extends OverlayPanel
 	static String formatCompactGpPerHour(long gpPerHour)
 	{
 		return (gpPerHour < 0 ? "-" : "") + formatGp(Math.abs(gpPerHour)) + " gp/hr";
+	}
+
+	/**
+	 * Formats the single-line net-profit text, e.g. "1.2M gp" or "-50 gp".
+	 */
+	static String formatCompactNetProfit(long net)
+	{
+		return (net < 0 ? "-" : "") + formatGp(Math.abs(net)) + " gp";
 	}
 
 	/**

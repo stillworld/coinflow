@@ -250,6 +250,17 @@ public class ReconciliationContext
 	@Setter
 	private boolean blastFurnaceActive = false;
 
+	/**
+	 * Set when the diff was triggered by a Sailing boat cargo-hold container
+	 * change. Items can only leave the hold by being consumed (landing-site
+	 * and facility builds, ship-cannon shots) — there is no drop path out of
+	 * the hold — so {@code ConsumablesAndDropsHandler} expenses losses like
+	 * supplies instead of filing them under owned-drop bookkeeping.
+	 */
+	@Getter
+	@Setter
+	private boolean cargoHoldLoss = false;
+
 	@Getter
 	private final Set<Skill> activeSkillingSkills = new java.util.HashSet<>();
 

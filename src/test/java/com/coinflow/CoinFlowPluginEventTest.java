@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -8,6 +9,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import net.runelite.api.Client;
+import net.runelite.api.NPC;
+import net.runelite.api.Skill;
 import net.runelite.api.EnumComposition;
 import net.runelite.api.EnumID;
 import net.runelite.api.GameState;
@@ -37,7 +40,9 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.gameval.VarbitID;
+import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -1203,6 +1208,41 @@ public class CoinFlowPluginEventTest
 		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, unboxed));
 
 		Assert.assertEquals("Unboxing a set must not count the components as profit",
+			0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	/**
+	 * Regression for a live bug: collecting GE purchases through the
+	 * standalone collection screen (collect boxes, banker/clerk "Collect")
+	 * booked the items as market-value profit — a bought Zamorakian hasta
+	 * gained +980,764 gp. GE_COLLECT was missing from the suppressed set,
+	 * so the collected arrivals processed as ordinary loot.
+	 */
+	@Test
+	public void geCollect_suppressesCollectedPurchases()
+	{
+		stubTrackableItem(11889, "Zamorakian hasta", 980_764L);
+		stubTrackableItem(21304, "Obsidian platelegs", 746_135L);
+
+		plugin.previousInventorySnapshot = snapshot();
+		plugin.snapshotInitialized = true;
+
+		// Open the collection box — previously unsuppressed
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.GE_COLLECT);
+		plugin.onWidgetLoaded(open);
+		Assert.assertTrue("GE_COLLECT must suppress tracking", plugin.isTrackingSuppressed());
+
+		// Collected purchases land while the screen is open
+		ItemContainer collected = mockContainer(InventoryID.INV, 11889, 1, 21304, 1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, collected));
+
+		// Close → re-baseline; trailing packets are absorbed, none book profit
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.GE_COLLECT, 0, false));
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, collected));
+
+		Assert.assertEquals("Collected GE purchases must not count as profit",
 			0L, plugin.session.getTotalProfit());
 		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
 	}
@@ -2688,6 +2728,100 @@ public class CoinFlowPluginEventTest
 	 * Creates a mock ItemContainer returning the given item at index 0.
 	 * Pass no itemId/qty for an empty container.
 	 */
+	// ── Sailing boat cargo hold ───────────────────────────────────────────
+
+	@Test
+	public void sailingCargo_consumptionFromHold_booksExpense()
+	{
+		int plankId = 960;
+		stubTrackableItem(plankId, "Plank", 300L);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(1);
+
+		ItemContainer inv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		ItemContainer fullHold = mockContainer(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, plankId, 10);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(fullHold);
+
+		// Baseline: hold contents merge into the snapshot while the boat is spawned.
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+		Assert.assertTrue(plugin.snapshotInitialized);
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+
+		// Landing-site build consumes the planks straight out of the hold.
+		ItemContainer emptyHold = mockContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(emptyHold);
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, emptyHold));
+
+		Assert.assertEquals(10 * 300L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void sailingCargo_noSpawnedBoat_holdContentsIgnored()
+	{
+		int plankId = 960;
+		stubTrackableItem(plankId, "Plank", 300L);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(0);
+
+		ItemContainer inv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		ItemContainer fullHold = mockContainer(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, plankId, 10);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(fullHold);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+		Assert.assertTrue(plugin.snapshotInitialized);
+
+		// No spawned boat — hold contents are not player-reachable storage and
+		// never enter the merged snapshot.
+		ItemContainer emptyHold = mockContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(emptyHold);
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, emptyHold));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void sailingCargo_depositThroughOpenHoldInterface_booksNothing()
+	{
+		int plankId = 960;
+		stubTrackableItem(plankId, "Plank", 300L);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(1);
+
+		ItemContainer invWithPlanks = mockContainer(InventoryID.INV, plankId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(invWithPlanks);
+		ItemContainer emptyHold = mockContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(emptyHold);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, invWithPlanks));
+		Assert.assertTrue(plugin.snapshotInitialized);
+
+		// Deposit into the hold with the (suppressed) hold interface open:
+		// both halves of the transfer baseline away.
+		plugin.getOpenSuppressedInterfaces().add(net.runelite.api.gameval.InterfaceID.SAILING_BOAT_CARGOHOLD);
+		plugin.setTrackingSuppressed(true);
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+		ItemContainer fullHold = mockContainer(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, plankId, 10);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(fullHold);
+		plugin.onItemContainerChanged(new ItemContainerChanged(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, fullHold));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+	}
+
 	private ItemContainer mockContainer(int containerId, int... idQtyPairs)
 	{
 		ItemContainer container = org.mockito.Mockito.mock(ItemContainer.class);
@@ -3860,6 +3994,7 @@ public class CoinFlowPluginEventTest
 		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
 		when(runeEnum.getIntValue(2)).thenReturn(airRuneId);
 		when(runeEnum.getIntValue(3)).thenReturn(fireRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId, airRuneId, fireRuneId});
 		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
 
 		// Initial varbits: slot 0 (Law: 50), slot 1 (Air: 100), slot 2 (Fire: 50)
@@ -3889,6 +4024,10 @@ public class CoinFlowPluginEventTest
 		varbitEvent.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
 		plugin.onVarbitChanged(varbitEvent);
 
+		// Pouch-rune diffs defer to GameTick settle so a same-tick container
+		// half of a pouch transfer can cancel against them.
+		plugin.onGameTick(new GameTick());
+
 		// Expenses: 1 Law (100) + 3 Air (15) + 1 Fire (5) = 120 gp
 		Assert.assertEquals(120L, plugin.getSession().getTotalExpenses());
 		Assert.assertEquals(-120L, plugin.getSession().getTotalProfit());
@@ -3907,6 +4046,7 @@ public class CoinFlowPluginEventTest
 
 		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
 		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
 		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
 
 		// Varbit values exist (e.g. from prior session), but pouch is in bank (not in inv)
@@ -3939,6 +4079,7 @@ public class CoinFlowPluginEventTest
 
 		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
 		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
 		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
 
 		// Start: Pouch has 0 runes, Inventory has Rune Pouch + 10 Law runes
@@ -3973,6 +4114,173 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
+	public void runePouch_deposit_containerEventBeforeVarbit_noPhantomLossOrGain()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int lawRuneId = ItemID.LAWRUNE;
+		stubTrackableItem(lawRuneId, "Law rune", 100L);
+
+		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
+		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
+		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_1)).thenReturn(1);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(0);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1, lawRuneId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Deposit: the container packet lands while the pouch varbits are still
+		// stale, so the merged snapshot momentarily shows the runes gone.
+		ItemContainer inv2 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(10);
+		VarbitChanged varbitEvent = new VarbitChanged();
+		varbitEvent.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
+		plugin.onVarbitChanged(varbitEvent);
+
+		plugin.onGameTick(new GameTick());
+
+		// The transfer must net to nothing — no supply expense, no loot gain.
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void runePouch_deposit_varbitEventBeforeContainer_noPhantomLossOrGain()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int lawRuneId = ItemID.LAWRUNE;
+		stubTrackableItem(lawRuneId, "Law rune", 100L);
+
+		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
+		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
+		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_1)).thenReturn(1);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(0);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1, lawRuneId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Deposit: the varbit lands before the inventory packet, so the merged
+		// snapshot momentarily shows the runes duplicated (inv + pouch).
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(10);
+		VarbitChanged varbitEvent = new VarbitChanged();
+		varbitEvent.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
+		plugin.onVarbitChanged(varbitEvent);
+
+		ItemContainer inv2 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void runePouch_deposit_containerFirstThenWithdraw_netZeroAcrossTicks()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int lawRuneId = ItemID.LAWRUNE;
+		stubTrackableItem(lawRuneId, "Law rune", 100L);
+
+		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
+		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
+		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_1)).thenReturn(1);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(0);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1, lawRuneId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Deposit container-first, then varbit
+		ItemContainer inv2 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(10);
+		VarbitChanged varbitEvent = new VarbitChanged();
+		varbitEvent.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
+		plugin.onVarbitChanged(varbitEvent);
+
+		plugin.onGameTick(new GameTick());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+
+		// Now withdraw (empty pouch): varbit drops first this time, container second
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(0);
+		VarbitChanged varbitEvent2 = new VarbitChanged();
+		varbitEvent2.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
+		plugin.onVarbitChanged(varbitEvent2);
+
+		ItemContainer inv3 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1, lawRuneId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv3);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv3));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
+	public void runePouch_deposit_rebaselineAbsorbsVarbitHalf_noPhantomLoss()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+
+		int lawRuneId = ItemID.LAWRUNE;
+		stubTrackableItem(lawRuneId, "Law rune", 100L);
+
+		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
+		when(runeEnum.getIntValue(1)).thenReturn(lawRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{lawRuneId});
+		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
+
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_TYPE_1)).thenReturn(1);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(0);
+
+		ItemContainer inv1 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1, lawRuneId, 10);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv1);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv1));
+
+		// Use-intent re-baseline: the varbit lands first and is absorbed into
+		// the baseline while the container still shows the rune — the baseline
+		// counts it twice, so the trailing container half defers an unpaired -1.
+		plugin.setNeedsRebaseline(true);
+		when(client.getVarbitValue(VarbitID.RUNE_POUCH_QUANTITY_1)).thenReturn(10);
+		VarbitChanged varbitEvent = new VarbitChanged();
+		varbitEvent.setVarbitId(VarbitID.RUNE_POUCH_QUANTITY_1);
+		plugin.onVarbitChanged(varbitEvent);
+
+		ItemContainer inv2 = mockContainer(InventoryID.INV, ItemID.BH_RUNE_POUCH, 1);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		plugin.onGameTick(new GameTick());
+
+		Assert.assertEquals(0L, plugin.getSession().getTotalExpenses());
+		Assert.assertEquals(0L, plugin.getSession().getGrossProfit());
+		Assert.assertEquals(0L, plugin.getSession().getTotalProfit());
+	}
+
+	@Test
 	public void runePouch_highAlchemyWithNatureRuneInPouch()
 	{
 		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
@@ -3986,6 +4294,7 @@ public class CoinFlowPluginEventTest
 
 		EnumComposition runeEnum = org.mockito.Mockito.mock(EnumComposition.class);
 		when(runeEnum.getIntValue(1)).thenReturn(natureRuneId);
+		when(runeEnum.getIntVals()).thenReturn(new int[]{natureRuneId});
 		when(client.getEnum(EnumID.RUNEPOUCH_RUNE)).thenReturn(runeEnum);
 
 		// Baseline: Rune Pouch has 10 Nature runes, inventory has Rune 2h sword
@@ -4001,6 +4310,9 @@ public class CoinFlowPluginEventTest
 		ItemContainer inv2 = mockContainer(InventoryID.INV, ItemID.DIVINE_RUNE_POUCH, 1, coinsId, 38_400);
 		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv2);
 		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv2));
+
+		// The Nature rune row defers to GameTick settle (pouch-rune deferral).
+		plugin.onGameTick(new GameTick());
 
 		// Profit accounting:
 		// Gross profit: 38,400 coins
@@ -4542,6 +4854,31 @@ public class CoinFlowPluginEventTest
 			"goldDropMinThreshold",
 			Integer.MAX_VALUE
 		);
+	}
+
+	@Test
+	public void loginXpSync_doesNotRegisterAsSkillActivity()
+	{
+		when(client.getTickCount()).thenReturn(100);
+		// Stale baseline read before the server's XP sync landed
+		plugin.previousSkillXp.put(net.runelite.api.Skill.HERBLORE, 0);
+
+		GameStateChanged loggingIn = new GameStateChanged();
+		loggingIn.setGameState(GameState.LOGGING_IN);
+		plugin.onGameStateChanged(loggingIn);
+
+		plugin.onStatChanged(new StatChanged(net.runelite.api.Skill.HERBLORE, 4_224_014, 99, 99));
+		Assert.assertNull("login XP sync must not count as skilling XP",
+			plugin.lastSkillXpTicks.get(net.runelite.api.Skill.HERBLORE));
+
+		when(client.getSkillExperience(net.runelite.api.Skill.HERBLORE)).thenReturn(4_224_014);
+		plugin.onGameTick(new GameTick());
+		plugin.onGameTick(new GameTick());
+
+		// After the sync window, a real XP drop still counts
+		when(client.getTickCount()).thenReturn(105);
+		plugin.onStatChanged(new StatChanged(net.runelite.api.Skill.HERBLORE, 4_224_114, 99, 99));
+		Assert.assertEquals(Integer.valueOf(105), plugin.lastSkillXpTicks.get(net.runelite.api.Skill.HERBLORE));
 	}
 
 	@Test
@@ -8685,6 +9022,148 @@ public class CoinFlowPluginEventTest
 			"Prayer potion", ignored.get());
 		Assert.assertTrue(plugin.ignoredItemNames.contains("prayer potion"));
 		Assert.assertTrue(plugin.getSession().getTrackedExpenses().isEmpty());
+	}
+
+	// ── Activity timeline & classification ──────────────────────────────
+
+	private static final Duration TICK = Duration.ofMillis(600);
+
+	private NPC mockNpcTarget(String name)
+	{
+		Player p = mock(Player.class);
+		NPC npc = mock(NPC.class);
+		when(npc.getName()).thenReturn(name);
+		when(p.getInteracting()).thenReturn(npc);
+		when(client.getLocalPlayer()).thenReturn(p);
+		return npc;
+	}
+
+	@Test
+	public void classify_idle_returnsAfk()
+	{
+		plugin.session = plugin.session.tick(0);
+		Assert.assertTrue(plugin.session.isIdle());
+		Assert.assertEquals(ActivityTimeline.ActivityClass.AFK,
+			plugin.activityMonitor.classify(plugin.session, 100));
+	}
+
+	@Test
+	public void classify_bankOpen_returnsBanking()
+	{
+		Widget bankTitle = mock(Widget.class);
+		when(client.getWidget(InterfaceID.Bankmain.TITLE)).thenReturn(bankTitle);
+		Assert.assertEquals(ActivityTimeline.ActivityClass.BANKING,
+			plugin.activityMonitor.classify(plugin.session, 100));
+	}
+
+	@Test
+	public void classify_npcTalkWithoutCombatXp_isNotCombat()
+	{
+		mockNpcTarget("Banker");
+		Assert.assertNull(plugin.activityMonitor.classify(plugin.session, 100));
+	}
+
+	@Test
+	public void classify_npcTargetPlusCombatXp_returnsNpcName()
+	{
+		mockNpcTarget("Vorkath");
+		plugin.lastSkillXpTicks.put(Skill.SLAYER, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.COMBAT, cls.kind);
+		Assert.assertEquals("Vorkath", cls.label);
+	}
+
+	@Test
+	public void classify_alching_labelsMagicNotCombat()
+	{
+		plugin.lastSkillXpTicks.put(Skill.MAGIC, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.SKILLING, cls.kind);
+		Assert.assertEquals("Magic", cls.label);
+	}
+
+	@Test
+	public void classify_blastFurnace_beatsSmithing()
+	{
+		plugin.blastFurnaceTracker.onObjectSpawn(ObjectID.BLAST_FURNACE_CONVEYER_BELT_CLICKABLE);
+		plugin.lastSkillXpTicks.put(Skill.SMITHING, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.BLAST_FURNACE, cls.kind);
+	}
+
+	@Test
+	public void classify_noSignal_returnsNull()
+	{
+		Assert.assertNull(plugin.activityMonitor.classify(plugin.session, 100));
+	}
+
+	@Test
+	public void onNpcLootReceived_creditsCombatSegment()
+	{
+		for (int i = 0; i < 21; i++)
+		{
+			plugin.activityTimeline.onTick(
+				ActivityTimeline.ActivityClass.combat("Vorkath"), TICK, TICK, 0, 0);
+		}
+		plugin.onNpcLootReceived(new NpcLootReceived(mock(NPC.class), Collections.emptyList()));
+		Assert.assertEquals(1, plugin.activityTimeline.getCurrentSegment().kills);
+	}
+
+	@Test
+	public void onNpcLootReceived_nonCombat_dropped()
+	{
+		for (int i = 0; i < 21; i++)
+		{
+			plugin.activityTimeline.onTick(
+				ActivityTimeline.ActivityClass.skilling("Mining"), TICK, TICK, 0, 0);
+		}
+		plugin.onNpcLootReceived(new NpcLootReceived(mock(NPC.class), Collections.emptyList()));
+		Assert.assertEquals(0, plugin.activityTimeline.getCurrentSegment().kills);
+	}
+
+	@Test
+	public void onGameTick_feedsTimeline()
+	{
+		plugin.snapshotInitialized = true;
+		plugin.onGameTick(new GameTick());
+		Assert.assertFalse(plugin.activityTimeline.getSegments().isEmpty());
+	}
+
+	@Test
+	public void resetSession_clearsTimeline()
+	{
+		for (int i = 0; i < 21; i++)
+		{
+			plugin.activityTimeline.onTick(
+				ActivityTimeline.ActivityClass.combat("Vorkath"), TICK, TICK, 0, 0);
+		}
+		Assert.assertFalse(plugin.activityTimeline.getSegments().isEmpty());
+
+		plugin.resetSession();
+
+		Assert.assertTrue(plugin.activityTimeline.getSegments().isEmpty());
+	}
+
+	@Test
+	public void removeSessionItem_rebasesTimeline()
+	{
+		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Shark", 10, 1_000L));
+		// Confirm the combat segment (21 ticks) with the session total carried.
+		for (int i = 0; i < 21; i++)
+		{
+			plugin.activityTimeline.onTick(
+				ActivityTimeline.ActivityClass.combat("Vorkath"), TICK, TICK,
+				plugin.session.getGrossProfit(), plugin.session.getTotalExpenses());
+		}
+
+		plugin.removeSessionItem(1, false);
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+
+		// The -10k delta must not be attributed to the segment.
+		plugin.activityTimeline.onTick(
+			ActivityTimeline.ActivityClass.combat("Vorkath"), TICK, TICK,
+			plugin.session.getGrossProfit(), plugin.session.getTotalExpenses());
+		Assert.assertEquals(10_000L, plugin.activityTimeline.getCurrentSegment().gross);
 	}
 
 	@Test
