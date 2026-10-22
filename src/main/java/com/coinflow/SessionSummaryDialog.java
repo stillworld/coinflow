@@ -43,10 +43,16 @@ public class SessionSummaryDialog extends JDialog
 
 	public static void showDialog(Component parent, CoinFlowSession session, Runnable onFinishAndReset)
 	{
-		showDialog(parent, session, true, onFinishAndReset);
+		showDialog(parent, session, true, null, false, onFinishAndReset);
 	}
 
 	public static void showDialog(Component parent, CoinFlowSession session, boolean trackSpent, Runnable onFinishAndReset)
+	{
+		showDialog(parent, session, trackSpent, null, false, onFinishAndReset);
+	}
+
+	public static void showDialog(Component parent, CoinFlowSession session, boolean trackSpent,
+		ActivityTimeline timeline, boolean includeAfk, Runnable onFinishAndReset)
 	{
 		if (GraphicsEnvironment.isHeadless())
 		{
@@ -59,15 +65,15 @@ public class SessionSummaryDialog extends JDialog
 			SessionSummaryDialog dialog;
 			if (window instanceof Frame)
 			{
-				dialog = new SessionSummaryDialog((Frame) window, session, trackSpent, onFinishAndReset);
+				dialog = new SessionSummaryDialog((Frame) window, session, trackSpent, timeline, includeAfk, onFinishAndReset);
 			}
 			else if (window instanceof Dialog)
 			{
-				dialog = new SessionSummaryDialog((Dialog) window, session, trackSpent, onFinishAndReset);
+				dialog = new SessionSummaryDialog((Dialog) window, session, trackSpent, timeline, includeAfk, onFinishAndReset);
 			}
 			else
 			{
-				dialog = new SessionSummaryDialog((Frame) null, session, trackSpent, onFinishAndReset);
+				dialog = new SessionSummaryDialog((Frame) null, session, trackSpent, timeline, includeAfk, onFinishAndReset);
 			}
 			dialog.setVisible(true);
 		});
@@ -85,17 +91,30 @@ public class SessionSummaryDialog extends JDialog
 
 	public SessionSummaryDialog(Frame owner, CoinFlowSession session, boolean trackSpent, Runnable onFinishAndReset)
 	{
-		super(owner, "Coin Flow — Session Summary", true);
-		init(session, trackSpent, onFinishAndReset);
+		this(owner, session, trackSpent, null, false, onFinishAndReset);
 	}
 
 	public SessionSummaryDialog(Dialog owner, CoinFlowSession session, boolean trackSpent, Runnable onFinishAndReset)
 	{
-		super(owner, "Coin Flow — Session Summary", true);
-		init(session, trackSpent, onFinishAndReset);
+		this(owner, session, trackSpent, null, false, onFinishAndReset);
 	}
 
-	private void init(CoinFlowSession session, boolean trackSpent, Runnable onFinishAndReset)
+	public SessionSummaryDialog(Frame owner, CoinFlowSession session, boolean trackSpent,
+		ActivityTimeline timeline, boolean includeAfk, Runnable onFinishAndReset)
+	{
+		super(owner, "Coin Flow — Session Summary", true);
+		init(session, trackSpent, timeline, includeAfk, onFinishAndReset);
+	}
+
+	public SessionSummaryDialog(Dialog owner, CoinFlowSession session, boolean trackSpent,
+		ActivityTimeline timeline, boolean includeAfk, Runnable onFinishAndReset)
+	{
+		super(owner, "Coin Flow — Session Summary", true);
+		init(session, trackSpent, timeline, includeAfk, onFinishAndReset);
+	}
+
+	private void init(CoinFlowSession session, boolean trackSpent, ActivityTimeline timeline,
+		boolean includeAfk, Runnable onFinishAndReset)
 	{
 		setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 		setResizable(false);
@@ -143,12 +162,22 @@ public class SessionSummaryDialog extends JDialog
 		content.add(createDowntimeAuditPanel(activeTime, downtime, efficiencyPct, downtimePct));
 		content.add(Box.createVerticalStrut(14));
 
+		// 3b. Per-activity breakdown (only when the timeline recorded segments)
+		List<ActivityTimeline.Aggregate> aggregates =
+			timeline != null ? timeline.aggregateByLabel() : java.util.Collections.emptyList();
+		JPanel activityPanel = createActivityBreakdownPanel(aggregates, trackSpent, includeAfk, totalTime);
+		if (activityPanel != null)
+		{
+			content.add(activityPanel);
+			content.add(Box.createVerticalStrut(14));
+		}
+
 		// 4. Top Revenue vs Biggest Cost Sinks
 		content.add(createBreakdownPanel(session, trackSpent, grossProfit, totalExpenses));
 		content.add(Box.createVerticalStrut(14));
 
 		// 5. Key Efficiency Insight
-		content.add(createInsightPanel(trackSpent, grossProfit, totalExpenses, netProfit, activeGpHr, trueGpHr, downtimePct, profitMargin));
+		content.add(createInsightPanel(trackSpent, grossProfit, totalExpenses, netProfit, activeGpHr, trueGpHr, downtimePct, profitMargin, aggregates, totalTime));
 		content.add(Box.createVerticalStrut(18));
 
 		// 6. Action Footer
@@ -373,6 +402,65 @@ public class SessionSummaryDialog extends JDialog
 		return card;
 	}
 
+	/**
+	 * Per-activity table: where the time went and what each activity earned
+	 * (plus kills and net-per-kill for combat segments). Returns null when the
+	 * timeline has no usable segments so the dialog layout is unchanged.
+	 */
+	private JPanel createActivityBreakdownPanel(List<ActivityTimeline.Aggregate> aggregates,
+		boolean trackSpent, boolean includeAfk, Duration totalTime)
+	{
+		if (aggregates.isEmpty())
+		{
+			return null;
+		}
+		long totalMillis = Math.max(1, totalTime.toMillis());
+
+		JPanel card = createCardPanel();
+		card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+
+		JLabel sectionTitle = new JLabel("Activity Breakdown");
+		sectionTitle.setFont(FontManager.getRunescapeBoldFont());
+		sectionTitle.setForeground(ACCENT_GOLD);
+		card.add(sectionTitle);
+		card.add(Box.createVerticalStrut(8));
+
+		for (ActivityTimeline.Aggregate agg : aggregates)
+		{
+			JPanel row = new JPanel(new GridLayout(1, 2, 8, 0));
+			row.setOpaque(false);
+
+			int sharePct = (int) Math.min(100, (agg.totalTime.toMillis() * 100) / totalMillis);
+			JLabel left = new JLabel(agg.label);
+			left.setFont(FontManager.getRunescapeSmallFont());
+			left.setForeground(Color.WHITE);
+			row.add(left);
+
+			StringBuilder right = new StringBuilder();
+			right.append(formatDurationWords(agg.totalTime)).append(" (").append(sharePct).append("%) · ");
+			right.append(QuantityFormatter.quantityToStackSize(agg.gpPerHour(includeAfk))).append(" gp/hr · ");
+			long net = agg.net();
+			right.append(net < 0 ? "-" : "+").append(QuantityFormatter.quantityToStackSize(Math.abs(net))).append(" gp");
+			if (agg.kind == ActivityTimeline.Kind.COMBAT && agg.kills > 0)
+			{
+				right.append(" · ").append(agg.kills).append(agg.kills == 1 ? " kill" : " kills")
+					.append(", ").append(QuantityFormatter.quantityToStackSize(net / agg.kills)).append("/kill");
+				if (trackSpent && agg.expenses > 0)
+				{
+					right.append(" (").append(QuantityFormatter.quantityToStackSize(agg.expenses / agg.kills)).append(" supplies)");
+				}
+			}
+
+			JLabel rightLabel = new JLabel(right.toString(), SwingConstants.RIGHT);
+			rightLabel.setFont(FontManager.getRunescapeSmallFont());
+			rightLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+			row.add(rightLabel);
+
+			card.add(row);
+		}
+		return card;
+	}
+
 	private JPanel createInsightPanel(
 		boolean trackSpent,
 		long grossProfit,
@@ -381,7 +469,9 @@ public class SessionSummaryDialog extends JDialog
 		long activeGpHr,
 		long trueGpHr,
 		int downtimePct,
-		double profitMargin)
+		double profitMargin,
+		List<ActivityTimeline.Aggregate> aggregates,
+		Duration totalTime)
 	{
 		JPanel card = createCardPanel();
 		card.setLayout(new BorderLayout(8, 4));
@@ -406,6 +496,41 @@ public class SessionSummaryDialog extends JDialog
 		else if (totalExpenses == 0)
 		{
 			insightText = "100% pure profit! Zero supplies consumed during this session.";
+		}
+		else if (aggregates != null && aggregates.size() >= 2)
+		{
+			long totalMillis = Math.max(1, totalTime.toMillis());
+			ActivityTimeline.Aggregate banking = null;
+			ActivityTimeline.Aggregate best = null;
+			for (ActivityTimeline.Aggregate agg : aggregates)
+			{
+				if (agg.kind == ActivityTimeline.Kind.BANKING)
+				{
+					banking = agg;
+				}
+				if (best == null || agg.net() > best.net())
+				{
+					best = agg;
+				}
+			}
+			int bankingPct = banking != null ? (int) ((banking.totalTime.toMillis() * 100) / totalMillis) : 0;
+			String bestPart = best != null && best.net() != 0
+				? String.format(" Best earner: %s at %s gp/hr.",
+					best.label, QuantityFormatter.quantityToStackSize(best.gpPerHour(true)))
+				: "";
+			if (bankingPct >= 10)
+			{
+				insightText = String.format("%d%% of your session was Banking / GE.%s", bankingPct, bestPart);
+			}
+			else if (!bestPart.isEmpty())
+			{
+				insightText = bestPart.trim();
+			}
+			else
+			{
+				insightText = String.format("Net margin of %.1f%% with %s gp spent.",
+					profitMargin, QuantityFormatter.quantityToStackSize(totalExpenses));
+			}
 		}
 		else if (downtimePct >= 20 && activeGpHr > trueGpHr)
 		{

@@ -51,8 +51,10 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.NpcLootReceived;
 import net.runelite.client.events.OverlayMenuClicked;
 import net.runelite.client.game.ItemManager;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -81,6 +83,9 @@ public class CoinFlowPlugin extends Plugin
 
 	@Inject
 	ItemManager itemManager;
+
+	@Inject
+	SkillIconManager skillIconManager;
 
 	@Inject
 	ConfigManager configManager;
@@ -169,6 +174,23 @@ public class CoinFlowPlugin extends Plugin
 	 * Ring of dueling(1) that crumbled on its last charge).
 	 */
 	final Map<Integer, Integer> pendingWornAmmoExpenses = new HashMap<>();
+
+	/**
+	 * Pouch-eligible rune diff rows (canonical id -> signed net qty) deferred to
+	 * GameTick settle. A rune pouch transfer splits across an
+	 * ItemContainerChanged and a VarbitChanged that can land in either order —
+	 * each half diffs as a phantom gain/loss on its own, so the rows are held
+	 * until both have arrived and cancel out.
+	 */
+	final Map<Integer, Integer> pendingPouchDiffs = new HashMap<>();
+
+	/**
+	 * Client tick at which a re-baseline last swallowed a pouch-rune diff row
+	 * (-1 = never). A baseline taken mid pouch-transfer absorbs one half of
+	 * the split container/varbit pair; the other half lands deferred and
+	 * unpaired, so settlePendingPouchDiffs drops held rows within the window.
+	 */
+	int pouchAbsorbBaselineTick = -1;
 
 	/**
 	 * Worn Barrows gear that dropped a degradation stage this tick —
@@ -478,6 +500,13 @@ public class CoinFlowPlugin extends Plugin
 	final ActivityMonitor activityMonitor = new ActivityMonitor(this);
 	final SessionApplier sessionApplier = new SessionApplier(this);
 
+	/**
+	 * Per-activity segmentation of the session: samples session totals each
+	 * game tick and attributes the delta to the classified activity. Read
+	 * by the panel/summary on the EDT via a published immutable snapshot.
+	 */
+	final ActivityTimeline activityTimeline = new ActivityTimeline();
+
 	final ContainerPickupTracker containerPickupTracker = new ContainerPickupTracker(this);
 	final CannonTracker cannonTracker = new CannonTracker(this);
 	final BlastFurnaceTracker blastFurnaceTracker = new BlastFurnaceTracker(this);
@@ -511,6 +540,7 @@ public class CoinFlowPlugin extends Plugin
 		deathTracker.reset();
 		cannonTracker.reset();
 		blastFurnaceTracker.reset();
+		activityTimeline.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -569,6 +599,7 @@ public class CoinFlowPlugin extends Plugin
 		deathTracker.reset();
 		cannonTracker.reset();
 		blastFurnaceTracker.reset();
+		activityTimeline.reset();
 	}
 
 	@Provides
@@ -886,6 +917,15 @@ public class CoinFlowPlugin extends Plugin
 		gameTickProcessor.onGameTick(event);
 	}
 
+	@Subscribe
+	public void onNpcLootReceived(NpcLootReceived event)
+	{
+		if (!isTrackingSuppressed())
+		{
+			activityTimeline.recordKill();
+		}
+	}
+
 
 	void recordPlayerActivity()
 	{
@@ -1048,6 +1088,12 @@ public class CoinFlowPlugin extends Plugin
 
 		Widget depositBox = client.getWidget(InterfaceID.BankDepositbox.FRAME);
 		if (depositBox != null && !depositBox.isHidden())
+		{
+			return true;
+		}
+
+		Widget runePouch = client.getWidget(InterfaceID.RunePouch.UNIVERSE);
+		if (runePouch != null && !runePouch.isHidden())
 		{
 			return true;
 		}

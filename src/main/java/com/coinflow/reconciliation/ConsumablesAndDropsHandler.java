@@ -124,6 +124,17 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 					itemName, quantity, price, (long) quantity * price);
 			}
+			else if (context.isCargoHoldLoss())
+			{
+				// Items can only leave the boat's cargo hold by being consumed
+				// (landing-site/facility builds, ship-cannon shots) — there is
+				// no drop path out of the hold, so expense them like supplies.
+				long price = ItemPricing.priceOf(itemId, itemManager);
+				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				context.retireSessionGain(itemId, quantity);
+				log.debug("Consumed from boat cargo hold: {} x{} @ {} gp = {} gp",
+					itemName, quantity, price, (long) quantity * price);
+			}
 			else
 			{
 				// Non-consumable item dropped from inventory (e.g. Coal, Iron ore, logs, gems, Cooking cape)

@@ -2,7 +2,9 @@ package com.coinflow;
 
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
@@ -31,6 +33,14 @@ public class InventorySnapshotService
 	private static final int[] RUNE_POUCH_TYPE_VARBITS = {
 		VarbitID.RUNE_POUCH_TYPE_1, VarbitID.RUNE_POUCH_TYPE_2, VarbitID.RUNE_POUCH_TYPE_3,
 		VarbitID.RUNE_POUCH_TYPE_4, VarbitID.RUNE_POUCH_TYPE_5, VarbitID.RUNE_POUCH_TYPE_6
+	};
+
+	private static final int[] SAILING_CARGOHOLD_IDS = {
+		InventoryID.SAILING_BOAT_1_CARGOHOLD,
+		InventoryID.SAILING_BOAT_2_CARGOHOLD,
+		InventoryID.SAILING_BOAT_3_CARGOHOLD,
+		InventoryID.SAILING_BOAT_4_CARGOHOLD,
+		InventoryID.SAILING_BOAT_5_CARGOHOLD
 	};
 
 	private static final int[] SCROLL_BOOK_VARBITS = {
@@ -256,7 +266,66 @@ public class InventorySnapshotService
 			}
 		}
 
+		// The spawned boat's cargo hold is player storage — merges in like the
+		// rune pouch so inv<->hold deposits net to zero and anything consumed
+		// straight out of the hold (landing-site/facility builds, ship-cannon
+		// shots) diffs as a real loss.
+		if (isSailingBoatSpawned())
+		{
+			for (int cargoId : SAILING_CARGOHOLD_IDS)
+			{
+				ItemContainer cargo = client.getItemContainer(cargoId);
+				if (cargo == null || cargo.getItems() == null)
+				{
+					continue;
+				}
+				for (Item item : cargo.getItems())
+				{
+					if (item != null && item.getId() > 0 && item.getQuantity() > 0)
+					{
+						map.merge(normalizeContainerItemId(item.getId()), item.getQuantity(), Integer::sum);
+					}
+				}
+			}
+		}
+
 		return InventorySnapshot.fromMap(map);
+	}
+
+	/**
+	 * True while the player's boat is spawned in the world. The hold stays
+	 * spawned (and its contents live) while moored at an island or port, so
+	 * consumption from the hold ashore still counts.
+	 */
+	private boolean isSailingBoatSpawned()
+	{
+		if (client == null)
+		{
+			return false;
+		}
+		try
+		{
+			return client.getVarbitValue(VarbitID.SAILING_BOAT_SPAWNED) == 1;
+		}
+		catch (Exception ignored)
+		{
+			return false;
+		}
+	}
+
+	/**
+	 * True if the container id is one of the five Sailing boat cargo holds.
+	 */
+	public static boolean isSailingCargoContainer(int containerId)
+	{
+		for (int id : SAILING_CARGOHOLD_IDS)
+		{
+			if (containerId == id)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -465,6 +534,42 @@ public class InventorySnapshotService
 			}
 		}
 		return false;
+	}
+
+	private Set<Integer> pouchRuneIds;
+
+	/**
+	 * True if the item id is a rune type the pouch can hold (every value in the
+	 * RUNEPOUCH_RUNE enum). Used to defer pouch-rune diff rows: a pouch
+	 * transfer splits across an ItemContainerChanged and a VarbitChanged that
+	 * can arrive in either order, and each half diffs as a phantom gain/loss
+	 * on its own.
+	 */
+	public boolean isPouchRuneId(int itemId)
+	{
+		if (client == null)
+		{
+			return false;
+		}
+		Set<Integer> ids = pouchRuneIds;
+		if (ids == null)
+		{
+			EnumComposition runepouchEnum = client.getEnum(EnumID.RUNEPOUCH_RUNE);
+			if (runepouchEnum == null || runepouchEnum.getIntVals() == null)
+			{
+				return false;
+			}
+			ids = new HashSet<>();
+			for (int runeId : runepouchEnum.getIntVals())
+			{
+				if (runeId > 0)
+				{
+					ids.add(runeId);
+				}
+			}
+			pouchRuneIds = ids;
+		}
+		return ids.contains(itemId);
 	}
 
 	/**

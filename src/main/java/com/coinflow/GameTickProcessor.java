@@ -32,6 +32,7 @@ final class GameTickProcessor
 		// Age the region grace window before re-evaluating so a same-tick
 		// transition keeps its full window.
 		plugin.interfaceTracker.onGameTick();
+		plugin.activityMonitor.onGameTick();
 
 		// Age the HUD and re-baseline grace windows the same way — BEFORE
 		// updateSuppressedRegion latches any fresh transition (so it keeps
@@ -99,6 +100,13 @@ final class GameTickProcessor
 			}
 			log.debug("Left unsupported world, resuming session");
 		}
+
+		// Settle deferred rune-pouch diffs: a pouch transfer splits across an
+		// ItemContainerChanged and a VarbitChanged that can land in either
+		// order — held rows are the net once the mirror halves cancel. Runs
+		// before the pickup-finalization early return so held rows can't
+		// strand across ticks.
+		plugin.inventoryDiffProcessor.settlePendingPouchDiffs();
 
 		if (!plugin.containerPickupTracker.finalizePendingPickups())
 		{
@@ -262,6 +270,17 @@ final class GameTickProcessor
 		{
 			CoinFlowSession prevSession = plugin.session;
 			plugin.session = plugin.session.tick(plugin.config.idleTimeoutMinutes(), plugin.isPlayerActive());
+
+			// Attribute this tick's session deltas (time + gp) to the current
+			// activity. Sampling totals rather than hooking mutation sites means
+			// every booking path — gains, expenses, reversals, GE ledger — is
+			// covered automatically.
+			plugin.activityTimeline.onTick(
+				plugin.activityMonitor.classify(plugin.session, plugin.client != null ? plugin.client.getTickCount() : 0),
+				plugin.session.getActiveTime().minus(prevSession.getActiveTime()),
+				plugin.session.getTotalInGameTime().minus(prevSession.getTotalInGameTime()),
+				plugin.session.getGrossProfit(),
+				plugin.session.getTotalExpenses());
 
 			// Periodic session telemetry (~every 30s) for debugging GP/hr and timer behavior.
 			// tickDelta should hover ~600ms; sustained near-0 values indicate clock corruption.

@@ -12,6 +12,7 @@ Coin Flow is a live profit and GP/hour tracker for RuneLite. It watches your inv
 - **Net Profit Tracking:** Optionally deducts the cost of supplies you use (food bites, potion doses, ammo, runes, teleports, and jewelry that crumbles on its last charge) so you see real profit, not just raw loot value.
 - **Floating Gold Drops:** Floating "+GP" drops (like XP drops) when you get loot or make money. Can appear overhead or in the top-right corner.
 - **Sidebar Panel:** Session breakdown with per-item gains and losses at current GE prices, plus a quick reset button.
+- **Activity Timeline:** Automatically segments your session by what you're doing — the NPC you're fighting, the skill you're training, Banking/GE, Blast Furnace, AFK — with per-activity GP/hr and, for combat, kill count, net GP per kill, and supply cost per kill. No manual "start trip" needed.
 - **Goal Mode:** Set a target GP goal (e.g. `10m`, `Bond`) with a progress bar and real-time ETA based on your current rate.
 - **Interface Aware:** Automatically pauses while the bank, Grand Exchange, trade screens, or storage interfaces are open, so banking and hauling never distort your stats.
 

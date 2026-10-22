@@ -114,6 +114,43 @@ public class SessionSummaryDialogTest
 	}
 
 	@Test
+	public void sessionSummaryDialog_withTimeline_rendersActivityBreakdown()
+	{
+		assumeHeaded();
+		Map<Integer, CoinFlowSession.TrackedItem> gains = new HashMap<>();
+		gains.put(1, new CoinFlowSession.TrackedItem(1, "Rune platebody", 1, 38_000L));
+		CoinFlowSession session = CoinFlowSession.createNew().withGains(gains);
+
+		ActivityTimeline timeline = new ActivityTimeline();
+		java.time.Duration tick = java.time.Duration.ofMillis(600);
+		for (int i = 0; i < 25; i++)
+		{
+			timeline.onTick(ActivityTimeline.ActivityClass.combat("Vorkath"), tick, tick, 38_000L, 0);
+		}
+		timeline.recordKill();
+		for (int i = 0; i < 6; i++)
+		{
+			timeline.onTick(ActivityTimeline.ActivityClass.BANKING, tick, tick, 38_000L, 0);
+		}
+
+		SessionSummaryDialog dialog = new SessionSummaryDialog(
+			(java.awt.Frame) null, session, true, timeline, false, () -> {});
+		Assert.assertNotNull(dialog);
+		dialog.dispose();
+	}
+
+	@Test
+	public void sessionSummaryDialog_nullTimeline_doesNotThrow()
+	{
+		assumeHeaded();
+		CoinFlowSession session = CoinFlowSession.createNew();
+		SessionSummaryDialog dialog = new SessionSummaryDialog(
+			(java.awt.Frame) null, session, true, null, false, () -> {});
+		Assert.assertNotNull(dialog);
+		dialog.dispose();
+	}
+
+	@Test
 	public void displaySummary_defaultsToFalse()
 	{
 		CoinFlowConfig config = new CoinFlowConfig() {};

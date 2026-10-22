@@ -39,6 +39,9 @@ public class InterfaceTracker
 		// Grand Exchange & Price Checker
 		InterfaceID.GE_OFFERS,
 		InterfaceID.GE_OFFERS_SIDE,
+		// The standalone collection screen (collect boxes, banker/clerk
+		// "Collect") — purchases landing here book as phantom loot otherwise.
+		InterfaceID.GE_COLLECT,
 		InterfaceID.GE_PRICECHECKER,
 		InterfaceID.GE_PRICECHECKER_SIDE,
 		InterfaceID.GE_PRICELIST,

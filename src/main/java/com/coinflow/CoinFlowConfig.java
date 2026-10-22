@@ -56,7 +56,8 @@ public interface CoinFlowConfig extends Config
 	enum OverlayStyle
 	{
 		DETAILED("Detailed"),
-		SINGLE_LINE("Single Line");
+		SINGLE_LINE("Single Line Gp/hr"),
+		SINGLE_LINE_NET("Single Line Net Profit");
 
 		private final String name;
 
@@ -75,7 +76,7 @@ public interface CoinFlowConfig extends Config
 	@ConfigItem(
 		keyName = "overlayStyle",
 		name = "Overlay Style",
-		description = "Detailed shows profit, spent, GP/hr, time and goal progress; Single Line shows only the GP/hr rate",
+		description = "Detailed shows profit, spent, GP/hr, time and goal progress; Single Line shows only GP/hr or net profit",
 		section = displaySection,
 		position = 1
 	)
@@ -109,11 +110,23 @@ public interface CoinFlowConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showTimeline",
+		name = "Show Activity Timeline",
+		description = "Show per-activity segments (gp/hr, kills, cost per kill) in the side panel",
+		section = displaySection,
+		position = 4
+	)
+	default boolean showTimeline()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "compactMode",
 		name = "Compact Mode",
 		description = "Display a streamlined, compact view in the side panel and shrink the overlay HUD",
 		section = displaySection,
-		position = 4
+		position = 5
 	)
 	default boolean compactMode()
 	{
@@ -125,7 +138,7 @@ public interface CoinFlowConfig extends Config
 		name = "Show Gold Drops",
 		description = "Display floating gold drops when gaining profit",
 		section = displaySection,
-		position = 5
+		position = 6
 	)
 	default boolean showGoldDrops()
 	{
@@ -156,7 +169,7 @@ public interface CoinFlowConfig extends Config
 		name = "Drop Position",
 		description = "Where to display floating gold drops on screen",
 		section = displaySection,
-		position = 6
+		position = 7
 	)
 	default GoldDropPosition goldDropPosition()
 	{
@@ -168,7 +181,7 @@ public interface CoinFlowConfig extends Config
 		name = "Min Gold Drop (GP)",
 		description = "Minimum GP value required to trigger an in-game gold drop (0 to show all)",
 		section = displaySection,
-		position = 7
+		position = 8
 	)
 	@Range(min = 0)
 	default int goldDropMinThreshold()
@@ -205,6 +218,17 @@ public interface CoinFlowConfig extends Config
 		hidden = true
 	)
 	default boolean itemsCardCollapsed()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "timelineCardCollapsed",
+		name = "Collapse Timeline Card",
+		description = "Collapse activity timeline card in side panel",
+		hidden = true
+	)
+	default boolean timelineCardCollapsed()
 	{
 		return false;
 	}
