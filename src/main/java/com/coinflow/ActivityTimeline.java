@@ -28,7 +28,7 @@ final class ActivityTimeline
 {
 	enum Kind
 	{
-		COMBAT, SKILLING, BLAST_FURNACE, BANKING, AFK, OTHER
+		COMBAT, SKILLING, BLAST_FURNACE, BANKING, AFK, TELEPORT, OTHER
 	}
 
 	/** Classifier output: which activity, plus a display label (NPC or skill name). */
@@ -37,6 +37,7 @@ final class ActivityTimeline
 		static final ActivityClass BANKING = new ActivityClass(Kind.BANKING, "Banking / GE");
 		static final ActivityClass BLAST_FURNACE = new ActivityClass(Kind.BLAST_FURNACE, "Blast Furnace");
 		static final ActivityClass AFK = new ActivityClass(Kind.AFK, "AFK");
+		static final ActivityClass TELEPORT = new ActivityClass(Kind.TELEPORT, "Teleport");
 
 		final Kind kind;
 		final String label;
@@ -224,7 +225,11 @@ final class ActivityTimeline
 
 	private static int confirmTicks(ActivityClass cls)
 	{
-		return (cls.kind == Kind.AFK || cls.kind == Kind.BANKING) ? QUICK_CONFIRM_TICKS : CONFIRM_TICKS;
+		// AFK/BANKING/TELEPORT are state or event signals rather than inferred
+		// work — a teleport is a momentary act, so it confirms fast and the
+		// next real activity takes over without a long shadow.
+		return (cls.kind == Kind.AFK || cls.kind == Kind.BANKING || cls.kind == Kind.TELEPORT)
+			? QUICK_CONFIRM_TICKS : CONFIRM_TICKS;
 	}
 
 	/**
@@ -269,7 +274,8 @@ final class ActivityTimeline
 
 	private static boolean isFoldableGap(ActivityClass cls)
 	{
-		return cls.kind == Kind.BANKING || cls.kind == Kind.AFK || cls.kind == Kind.OTHER;
+		return cls.kind == Kind.BANKING || cls.kind == Kind.AFK || cls.kind == Kind.TELEPORT
+			|| cls.kind == Kind.OTHER;
 	}
 
 	private void foldPendingIntoCurrent()

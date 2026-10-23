@@ -9083,6 +9083,44 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
+	public void classify_magicXpAfterSceneLoad_returnsTeleport()
+	{
+		plugin.activityMonitor.onSceneLoad(96);
+		plugin.lastSkillXpTicks.put(Skill.MAGIC, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.TELEPORT, cls.kind);
+		Assert.assertEquals("Teleport", cls.label);
+	}
+
+	@Test
+	public void classify_magicXpWithoutSceneLoad_staysMagic()
+	{
+		plugin.lastSkillXpTicks.put(Skill.MAGIC, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.SKILLING, cls.kind);
+		Assert.assertEquals("Magic", cls.label);
+	}
+
+	@Test
+	public void classify_staleSceneLoad_staysMagic()
+	{
+		plugin.activityMonitor.onSceneLoad(80);
+		plugin.lastSkillXpTicks.put(Skill.MAGIC, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.SKILLING, cls.kind);
+	}
+
+	@Test
+	public void classify_nonMagicXpAfterSceneLoad_notTeleport()
+	{
+		plugin.activityMonitor.onSceneLoad(96);
+		plugin.lastSkillXpTicks.put(Skill.MINING, 95);
+		ActivityTimeline.ActivityClass cls = plugin.activityMonitor.classify(plugin.session, 100);
+		Assert.assertEquals(ActivityTimeline.Kind.SKILLING, cls.kind);
+		Assert.assertEquals("Mining", cls.label);
+	}
+
+	@Test
 	public void classify_blastFurnace_beatsSmithing()
 	{
 		plugin.blastFurnaceTracker.onObjectSpawn(ObjectID.BLAST_FURNACE_CONVEYER_BELT_CLICKABLE);

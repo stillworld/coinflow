@@ -122,11 +122,23 @@ public interface CoinFlowConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showSparkline",
+		name = "Show Profit Sparkline",
+		description = "Draw a small cumulative profit line under Net Profit in the side panel (standard layout only)",
+		section = displaySection,
+		position = 5
+	)
+	default boolean showSparkline()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "compactMode",
 		name = "Compact Mode",
 		description = "Display a streamlined, compact view in the side panel and shrink the overlay HUD",
 		section = displaySection,
-		position = 5
+		position = 6
 	)
 	default boolean compactMode()
 	{
@@ -138,7 +150,7 @@ public interface CoinFlowConfig extends Config
 		name = "Show Gold Drops",
 		description = "Display floating gold drops when gaining profit",
 		section = displaySection,
-		position = 6
+		position = 7
 	)
 	default boolean showGoldDrops()
 	{
@@ -169,7 +181,7 @@ public interface CoinFlowConfig extends Config
 		name = "Drop Position",
 		description = "Where to display floating gold drops on screen",
 		section = displaySection,
-		position = 7
+		position = 8
 	)
 	default GoldDropPosition goldDropPosition()
 	{
@@ -181,7 +193,7 @@ public interface CoinFlowConfig extends Config
 		name = "Min Gold Drop (GP)",
 		description = "Minimum GP value required to trigger an in-game gold drop (0 to show all)",
 		section = displaySection,
-		position = 8
+		position = 9
 	)
 	@Range(min = 0)
 	default int goldDropMinThreshold()

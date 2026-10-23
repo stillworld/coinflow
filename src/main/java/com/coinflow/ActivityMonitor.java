@@ -38,6 +38,7 @@ final class ActivityMonitor
 	private final CoinFlowPlugin plugin;
 	private WorldPoint lastPlayerLocation;
 	private int lastPlayerActivityTick = -100;
+	private int lastLoadingTick = -100;
 	private final Deque<String> recentNpcTargets = new ArrayDeque<>();
 
 	ActivityMonitor(CoinFlowPlugin plugin)
@@ -191,7 +192,18 @@ final class ActivityMonitor
 		plugin.lastFarmingAnimTick = -100;
 		lastPlayerLocation = null;
 		lastPlayerActivityTick = -100;
+		lastLoadingTick = -100;
 		recentNpcTargets.clear();
+	}
+
+	/**
+	 * Scene-load tick, recorded on the LOADING game state. Any mid-session
+	 * map transition fires it — teleports, but also doors, ladders, dungeon
+	 * entrances, and crossing a map-square boundary on foot.
+	 */
+	void onSceneLoad(int tick)
+	{
+		lastLoadingTick = tick;
 	}
 
 	// ── Activity classification (feeds {@link ActivityTimeline}) ─────────
@@ -250,10 +262,23 @@ final class ActivityMonitor
 		Skill skilling = mostRecentSkillingSkill(currentTick);
 		if (skilling != null)
 		{
+			// A spellbook teleport reads as ordinary Magic XP — the tell is the
+			// LOADING scene transition that follows the cast. Only the
+			// conjunction counts: alching while crossing a map boundary can
+			// collide, but the label lives at most ~6s so the mislabel stays
+			// cheap. Item teleports (tabs, jewelry, POH) grant no XP and stay
+			// unclassified.
+			if (skilling == Skill.MAGIC && currentTick - lastLoadingTick <= TELEPORT_SIGNAL_TICKS)
+			{
+				return ActivityTimeline.ActivityClass.TELEPORT;
+			}
 			return ActivityTimeline.ActivityClass.skilling(skilling.getName());
 		}
 		return null;
 	}
+
+	/** How long a scene load remains teleport evidence — must outlast the quick confirm window. */
+	private static final int TELEPORT_SIGNAL_TICKS = 10;
 
 	private boolean hasRecentCombatXp(int currentTick)
 	{

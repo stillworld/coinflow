@@ -244,6 +244,9 @@ final class SessionApplier
 
 	/**
 	 * Checks if an active goal was reached and triggers a single notification.
+	 * Progress is evaluated against persisted contributions from earlier
+	 * sessions plus the live session; once complete the flag is persisted so
+	 * a restart never re-notifies.
 	 */
 	void checkGoalNotification()
 	{
@@ -254,15 +257,19 @@ final class SessionApplier
 			return;
 		}
 
-		long currentProfit = (plugin.session != null && plugin.config != null && !plugin.config.trackSpent())
-			? plugin.session.getGrossProfit()
-			: (plugin.session != null ? plugin.session.getTotalProfit() : 0L);
+		if (plugin.goalTracker.isComplete())
+		{
+			// Already completed and persisted — latch without re-notifying.
+			plugin.goalCompletedNotified = true;
+			return;
+		}
 
-		if (plugin.session != null && currentProfit >= goalAmount)
+		if (plugin.session != null && plugin.goalDisplayTotal() >= goalAmount)
 		{
 			if (!plugin.goalCompletedNotified)
 			{
 				plugin.goalCompletedNotified = true;
+				plugin.goalTracker.markComplete();
 				if (plugin.config.notifyOnGoal())
 				{
 					String label = CoinFlowSession.cleanGoalName(plugin.config.goalName());

@@ -5,6 +5,7 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.time.Duration;
 import javax.inject.Inject;
@@ -14,9 +15,10 @@ import net.runelite.client.ui.overlay.OverlayMenuEntry;
 import net.runelite.client.ui.overlay.OverlayPanel;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.ui.overlay.components.ComponentConstants;
+import net.runelite.client.ui.overlay.components.LayoutableRenderableEntity;
 import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.ProgressBarComponent;
-import net.runelite.client.ui.overlay.components.TitleComponent;
+import net.runelite.client.ui.overlay.components.TextComponent;
 import net.runelite.client.util.QuantityFormatter;
 
 public class CoinFlowOverlay extends OverlayPanel
@@ -35,6 +37,12 @@ public class CoinFlowOverlay extends OverlayPanel
 	private static final Color PROGRESS_BAR_BG = new Color(0x28, 0x28, 0x28);
 
 	private static final int MIN_PANEL_WIDTH = 140;
+	// Hard character cap for the goal name on the bar's left edge — it feeds
+	// maxLineWidth, so an unbounded name would stretch the whole overlay.
+	private static final int GOAL_BAR_LABEL_MAX_CHARS = 20;
+	// Compact mode tightens the cap to ~10 chars so the label can't crowd out
+	// the right-side progress text in the narrower panel.
+	private static final int GOAL_BAR_LABEL_MAX_COMPACT = 10;
 	private static final int PANEL_PADDING = 16;
 	private static final int COLUMN_SPACING = 12;
 	private static final int COMPACT_MIN_PANEL_WIDTH = 110;
@@ -115,6 +123,30 @@ public class CoinFlowOverlay extends OverlayPanel
 	}
 
 	/**
+	 * Bounds the goal name shown on the bar's left edge. Percent and ETA are
+	 * placed separately, so only the name itself needs a budget — a name that
+	 * fits keeps its full text. Compact mode truncates to ~10 chars with
+	 * "..." (vs ".." in the standard layout).
+	 */
+	static String goalBarName(String name)
+	{
+		return goalBarName(name, false);
+	}
+
+	static String goalBarName(String name, boolean compact)
+	{
+		if (compact)
+		{
+			return name.length() <= GOAL_BAR_LABEL_MAX_COMPACT
+				? name
+				: name.substring(0, GOAL_BAR_LABEL_MAX_COMPACT - 3) + "...";
+		}
+		return name.length() <= GOAL_BAR_LABEL_MAX_CHARS
+			? name
+			: name.substring(0, GOAL_BAR_LABEL_MAX_CHARS - 2) + "..";
+	}
+
+	/**
 	 * Renders the multi-line "Detailed" display (profit, spent, GP/hr, time, goal bar).
 	 */
 	private Dimension renderDetailed(Graphics2D graphics, CoinFlowSession session, boolean isIdle, boolean includeAfk, boolean compact)
@@ -130,11 +162,13 @@ public class CoinFlowOverlay extends OverlayPanel
 		if (!compact)
 		{
 			String titleText = formatTitle(isIdle);
-			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(titleText));
-			panelComponent.getChildren().add(TitleComponent.builder()
-				.text(titleText)
-				.color(isIdle ? IDLE_COLOR : TITLE_COLOR)
-				.build());
+			// runescape_small keeps the header smaller than the body text;
+			// TitleComponent can't take a font, so FontTitleComponent does.
+			Font titleFont = FontManager.getRunescapeSmallFont();
+			maxLineWidth = Math.max(maxLineWidth,
+				graphics.getFontMetrics(titleFont).stringWidth(titleText));
+			panelComponent.getChildren().add(
+				new FontTitleComponent(titleText, isIdle ? IDLE_COLOR : TITLE_COLOR, titleFont));
 		}
 
 		// ── Profit & Supplies (Dynamic Unified Display) ──────────────
@@ -197,27 +231,46 @@ public class CoinFlowOverlay extends OverlayPanel
 		long goalAmount = CoinFlowSession.parseGoalAmount(config.goalAmount());
 		if (config.showGoalOverlay() && goalAmount > 0)
 		{
-			double progress = session.getGoalProgress(goalAmount, trackSpent);
+			// goalDisplayTotal folds persisted cross-session progress into the
+			// live session contribution (and returns the full target when the
+			// goal is marked complete).
+			long goalTotal = plugin.goalDisplayTotal();
+			double progress = session.getGoalProgress(goalAmount, goalTotal);
 			boolean isGoalComplete = progress >= 1.0;
-			long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk, trackSpent);
+			// Blended cross-session rate: persisted progress/time folded in, so
+			// a fresh login or a losing stretch can't spike or blank the ETA.
+			long etaSeconds = session.getGoalEtaSeconds(goalAmount, goalTotal, plugin.goalDisplaySeconds());
 			String etaStr = CoinFlowSession.formatGoalEta(etaSeconds);
 
 			String goalName = CoinFlowSession.cleanGoalName(config.goalName());
-			String goalLabel = goalName.isEmpty() ? "Goal" : goalName;
+			String goalLabel = goalBarName(goalName.isEmpty() ? "Goal" : goalName, compact);
 			String percentStr = String.format("%.1f%%", progress * 100);
-
-			String barCenterText = isGoalComplete
-				? "Goal Reached! (100%)"
-				: (goalLabel + " " + percentStr + " - " + etaStr);
-
-			maxLineWidth = Math.max(maxLineWidth, fontMetrics.stringWidth(barCenterText) + 8);
 
 			progressBar = new ProgressBarComponent();
 			progressBar.setMinimum(0);
 			progressBar.setMaximum(goalAmount);
-			progressBar.setValue(Math.min((double) goalAmount, Math.max(0.0, (double) totalProfit)));
-			progressBar.setLabelDisplayMode(ProgressBarComponent.LabelDisplayMode.TEXT_ONLY);
-			progressBar.setCenterLabel(barCenterText);
+			progressBar.setValue(Math.min((double) goalAmount, Math.max(0.0, (double) goalTotal)));
+
+			int barTextWidth;
+			if (isGoalComplete)
+			{
+				progressBar.setLabelDisplayMode(ProgressBarComponent.LabelDisplayMode.TEXT_ONLY);
+				progressBar.setCenterLabel("Goal Reached! (100%)");
+				barTextWidth = fontMetrics.stringWidth("Goal Reached! (100%)");
+			}
+			else
+			{
+				// Name left, "1.4% - 4:32" right — edge labels never overlap,
+				// unlike a centered percent which paints over a long name.
+				String barRight = percentStr + " - " + etaStr;
+				progressBar.setLabelDisplayMode(ProgressBarComponent.LabelDisplayMode.TEXT_ONLY);
+				progressBar.setLeftLabel(goalLabel);
+				progressBar.setRightLabel(barRight);
+				barTextWidth = fontMetrics.stringWidth(goalLabel)
+					+ fontMetrics.stringWidth(barRight) + 16; // 4px side offsets + gap
+			}
+			maxLineWidth = Math.max(maxLineWidth, barTextWidth + 8);
+
 			progressBar.setForegroundColor(isGoalComplete ? GOAL_COMPLETE_COLOR : GOAL_IN_PROGRESS_COLOR);
 			progressBar.setBackgroundColor(PROGRESS_BAR_BG);
 			progressBar.setFontColor(Color.WHITE);
@@ -344,5 +397,61 @@ public class CoinFlowOverlay extends OverlayPanel
 	static String formatTimeRight(Duration displayTime, boolean isIdle, boolean includeAfk)
 	{
 		return formatDuration(displayTime) + (isIdle ? (includeAfk ? " (idle)" : " (paused)") : "");
+	}
+
+	/**
+	 * A left-aligned title row rendered in its own font — TitleComponent
+	 * doesn't expose one (and centers anyway), but TextComponent does, so
+	 * the header can run smaller than the body text and sit flush left.
+	 * Row height comes from the rendered text, same as TitleComponent.
+	 */
+	private static final class FontTitleComponent implements LayoutableRenderableEntity
+	{
+		private final TextComponent text = new TextComponent();
+		private final String title;
+		private final Font font;
+		private final Rectangle bounds = new Rectangle();
+		private Point preferredLocation = new Point();
+		private Dimension preferredSize = new Dimension(ComponentConstants.STANDARD_WIDTH, 0);
+
+		FontTitleComponent(String title, Color color, Font font)
+		{
+			this.title = title;
+			this.font = font;
+			text.setText(title);
+			text.setColor(color);
+			text.setFont(font);
+		}
+
+		@Override
+		public Dimension render(Graphics2D graphics)
+		{
+			// Measure with the title's own font, not the render font.
+			FontMetrics metrics = graphics.getFontMetrics(font);
+			text.setPosition(preferredLocation.x, preferredLocation.y + metrics.getHeight());
+			Dimension rendered = text.render(graphics);
+			Dimension size = new Dimension(preferredSize.width, rendered.height);
+			bounds.setLocation(preferredLocation);
+			bounds.setSize(size);
+			return size;
+		}
+
+		@Override
+		public Rectangle getBounds()
+		{
+			return bounds;
+		}
+
+		@Override
+		public void setPreferredLocation(Point position)
+		{
+			this.preferredLocation = position;
+		}
+
+		@Override
+		public void setPreferredSize(Dimension dimension)
+		{
+			this.preferredSize = dimension;
+		}
 	}
 }

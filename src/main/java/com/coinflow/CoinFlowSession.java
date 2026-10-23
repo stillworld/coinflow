@@ -1061,6 +1061,15 @@ public final class CoinFlowSession
 	}
 
 	/**
+	 * The session profit figure goals evaluate against — net when tracking
+	 * supplies, gross otherwise. Clamped at 0.
+	 */
+	private long goalCurrent(boolean trackSpent)
+	{
+		return Math.max(0L, trackSpent ? totalProfit : grossProfit);
+	}
+
+	/**
 	 * Returns the remaining GP to reach the target goal.
 	 * Returns 0 if goal is achieved or no goal is set.
 	 */
@@ -1078,12 +1087,24 @@ public final class CoinFlowSession
 	 */
 	public long getGoalRemaining(long goalAmount, boolean trackSpent)
 	{
+		return getGoalRemaining(goalAmount, goalCurrent(trackSpent));
+	}
+
+	/**
+	 * Returns the remaining GP to reach the target goal against an explicit
+	 * current value (persisted progress plus live session contribution).
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param currentTotal current progress in GP (clamped at 0)
+	 * @return remaining GP to target, or 0 if reached
+	 */
+	public long getGoalRemaining(long goalAmount, long currentTotal)
+	{
 		if (goalAmount <= 0)
 		{
 			return 0L;
 		}
-		long current = Math.max(0L, trackSpent ? totalProfit : grossProfit);
-		return Math.max(0L, goalAmount - current);
+		return Math.max(0L, goalAmount - Math.max(0L, currentTotal));
 	}
 
 	/**
@@ -1103,12 +1124,25 @@ public final class CoinFlowSession
 	 */
 	public double getGoalProgress(long goalAmount, boolean trackSpent)
 	{
+		return getGoalProgress(goalAmount, goalCurrent(trackSpent));
+	}
+
+	/**
+	 * Returns the goal completion progress as a ratio between 0.0 and 1.0
+	 * against an explicit current value (persisted progress plus live session
+	 * contribution).
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param currentTotal current progress in GP (clamped at 0)
+	 * @return progress ratio between 0.0 and 1.0
+	 */
+	public double getGoalProgress(long goalAmount, long currentTotal)
+	{
 		if (goalAmount <= 0)
 		{
 			return 0.0;
 		}
-		long current = Math.max(0L, trackSpent ? totalProfit : grossProfit);
-		return Math.min(1.0, (double) current / goalAmount);
+		return Math.min(1.0, (double) Math.max(0L, currentTotal) / goalAmount);
 	}
 
 	/**
@@ -1136,12 +1170,28 @@ public final class CoinFlowSession
 	 */
 	public long getGoalEtaSeconds(long goalAmount, boolean includeAfkTime, boolean trackSpent)
 	{
+		return getGoalEtaSeconds(goalAmount, includeAfkTime, trackSpent, goalCurrent(trackSpent));
+	}
+
+	/**
+	 * Returns the estimated seconds remaining until the goal is reached against
+	 * an explicit current value (persisted progress plus live session
+	 * contribution). The GP/hr rate still derives from this session.
+	 *
+	 * @param goalAmount the target GP amount
+	 * @param includeAfkTime whether to compute using AFK time
+	 * @param trackSpent whether to evaluate the rate against net GP/hr (true) or gross (false)
+	 * @param currentTotal current progress in GP (clamped at 0)
+	 * @return estimated seconds remaining, 0 if achieved, or -1 if calculating/paused
+	 */
+	public long getGoalEtaSeconds(long goalAmount, boolean includeAfkTime, boolean trackSpent, long currentTotal)
+	{
 		if (goalAmount <= 0)
 		{
 			return -1;
 		}
 
-		long remaining = getGoalRemaining(goalAmount, trackSpent);
+		long remaining = getGoalRemaining(goalAmount, currentTotal);
 		if (remaining <= 0)
 		{
 			return 0; // Goal reached
@@ -1161,6 +1211,40 @@ public final class CoinFlowSession
 		}
 
 		return (remaining * 3600L) / gpHr;
+	}
+
+	/**
+	 * Goal ETA from the blended cross-session rate: remaining GP divided by
+	 * the average pace across all tracked goal time (persisted seconds plus
+	 * the live session), so a fresh login or a losing stretch can't spike or
+	 * blank out the estimate.
+	 *
+	 * @param goalAmount target GP
+	 * @param currentTotal blended progress (persisted + live), as {@link #getGoalRemaining}
+	 * @param trackedSeconds blended tracked time, as {@code goalDisplaySeconds}
+	 * @return estimated seconds remaining, 0 if achieved, or -1 while warming
+	 *         up / no positive blended rate
+	 */
+	public long getGoalEtaSeconds(long goalAmount, long currentTotal, long trackedSeconds)
+	{
+		if (goalAmount <= 0)
+		{
+			return -1;
+		}
+
+		long remaining = getGoalRemaining(goalAmount, currentTotal);
+		if (remaining <= 0)
+		{
+			return 0; // Goal reached
+		}
+
+		// Same 10s warmup as the live-rate path so a fresh goal shows --:--.
+		if (trackedSeconds < 10 || currentTotal <= 0)
+		{
+			return -1;
+		}
+
+		return (remaining * trackedSeconds) / currentTotal;
 	}
 
 	/**
