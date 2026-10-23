@@ -50,7 +50,7 @@
 
 ### Tests (`src/test/java/com/coinflow/`)
 - `TestHelpers.java`: Mockito builders for `Client`, `ItemManager`, `ItemContainer`, fake items, and snapshots.
-- Unit tests: `ActivityTimelineTest`, `CoinFlowPanelActivityTest`, `CoinFlowPluginTest`, `CoinFlowPluginEventTest`, `CoinFlowPluginGeTest`, `CoinFlowPluginPkTutorialTest`, `CoinFlowPluginMinigameQuarantineTest`, `CoinFlowSessionTest`, `GoalModeTest`, `GoalPersistenceTest`, `CoinFlowOverlayTest`, `CoinFlowGoldDropOverlayTest`, `InventorySnapshotTest`, `CoinFlowInputFilterTest`, `ConsumableRegistryTest`, `GrandExchangeTrackerTest`, `DeathTrackerTest`, `CannonTrackerTest`, `BlastFurnaceTrackerTest`.
+- Unit tests: `ActivityTimelineTest`, `CoinFlowPanelActivityTest`, `CoinFlowPluginTest`, `CoinFlowPluginEventTest`, `CoinFlowPluginGeTest`, `CoinFlowPluginPkTutorialTest`, `CoinFlowPluginMinigameQuarantineTest`, `CoinFlowSessionTest`, `GoalModeTest`, `GoalPersistenceTest`, `ProfitHistoryTest`, `CoinFlowPanelSparklineTest`, `CoinFlowOverlayTest`, `CoinFlowGoldDropOverlayTest`, `InventorySnapshotTest`, `CoinFlowInputFilterTest`, `ConsumableRegistryTest`, `GrandExchangeTrackerTest`, `DeathTrackerTest`, `CannonTrackerTest`, `BlastFurnaceTrackerTest`.
 - Reconciliation tests: `reconciliation/UniversalSkillSinkTest`, `reconciliation/ChargeDegradationHandlerTest`, `reconciliation/ProcessingPatternRegistryTest`, `reconciliation/BlastFurnaceHandlerTest`, `reconciliation/BarrowsWearTest`, `reconciliation/ConsumablesAndDropsHandlerTest`.
 
 
