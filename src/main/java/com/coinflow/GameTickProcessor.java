@@ -282,6 +282,12 @@ final class GameTickProcessor
 				plugin.session.getGrossProfit(),
 				plugin.session.getTotalExpenses());
 
+			// Sample cumulative profit for the panel sparkline. Always on —
+			// cheap, and enabling the toggle mid-session then shows history.
+			plugin.profitHistory.onTick(plugin.config.trackSpent()
+				? plugin.session.getTotalProfit()
+				: plugin.session.getGrossProfit());
+
 			// Periodic session telemetry (~every 30s) for debugging GP/hr and timer behavior.
 			// tickDelta should hover ~600ms; sustained near-0 values indicate clock corruption.
 			if (log.isDebugEnabled() && plugin.client != null && plugin.client.getTickCount() % 50 == 0)
@@ -308,6 +314,15 @@ final class GameTickProcessor
 				}
 				return false;
 			});
+		}
+
+		// Checkpoint goal progress every ~60 seconds (100 ticks). persistSession
+		// is idempotent and writes only the delta, so this caps how much a
+		// crash or force-quit can lose; the disk write is batched off-thread by
+		// ConfigManager so a 60s cadence costs nothing.
+		if (plugin.client != null && plugin.client.getTickCount() % 100 == 0)
+		{
+			plugin.goalTracker.persistSession();
 		}
 
 		// Check goal completion notification (with latch to prevent tick spam)

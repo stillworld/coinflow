@@ -507,6 +507,12 @@ public class CoinFlowPlugin extends Plugin
 	 */
 	final ActivityTimeline activityTimeline = new ActivityTimeline();
 
+	/**
+	 * Bounded cumulative-profit series sampled each game tick for the side
+	 * panel's optional sparkline. Reset wherever the timeline is reset.
+	 */
+	final ProfitHistory profitHistory = new ProfitHistory();
+
 	final ContainerPickupTracker containerPickupTracker = new ContainerPickupTracker(this);
 	final CannonTracker cannonTracker = new CannonTracker(this);
 	final BlastFurnaceTracker blastFurnaceTracker = new BlastFurnaceTracker(this);
@@ -516,6 +522,14 @@ public class CoinFlowPlugin extends Plugin
 	final SessionLifecycleManager lifecycleManager = new SessionLifecycleManager(this);
 	final InventoryDiffProcessor inventoryDiffProcessor = new InventoryDiffProcessor(this);
 	final GameTickProcessor gameTickProcessor = new GameTickProcessor(this);
+
+	/**
+	 * Persists goal progress per account across session resets, logouts, and
+	 * client restarts. The goal target stays in config; this owns the banked
+	 * progress and the persisted completion flag until the goal is cleared
+	 * or the target amount changes.
+	 */
+	final GoalTracker goalTracker = new GoalTracker(this);
 
 	// ── Interface IDs that suppress tracking ─────────────────────────────
 	// Maintained via InterfaceTracker; aliases preserved for backward compatibility
@@ -529,6 +543,7 @@ public class CoinFlowPlugin extends Plugin
 	{
 		log.info("Coin Flow {} started", Version.getFormattedVersion());
 		session = CoinFlowSession.createNew();
+		goalTracker.onNewSession();
 		previousInventorySnapshot = null;
 		previousEquipmentSnapshot = null;
 		snapshotInitialized = false;
@@ -541,6 +556,7 @@ public class CoinFlowPlugin extends Plugin
 		cannonTracker.reset();
 		blastFurnaceTracker.reset();
 		activityTimeline.reset();
+		profitHistory.reset();
 		goalCompletedNotified = false;
 		resetTransientTrackingState();
 		rebuildFilterSet();
@@ -588,6 +604,10 @@ public class CoinFlowPlugin extends Plugin
 			navButton = null;
 		}
 		panel = null;
+		// Persist the in-flight session's goal contribution so progress
+		// survives client restarts and plugin toggles.
+		goalTracker.persistSession();
+		goalTracker.onNewSession();
 		session = null;
 		previousInventorySnapshot = null;
 		previousEquipmentSnapshot = null;
@@ -600,6 +620,7 @@ public class CoinFlowPlugin extends Plugin
 		cannonTracker.reset();
 		blastFurnaceTracker.reset();
 		activityTimeline.reset();
+		profitHistory.reset();
 	}
 
 	@Provides
@@ -1400,6 +1421,26 @@ public class CoinFlowPlugin extends Plugin
 	void checkGoalNotification()
 	{
 		sessionApplier.checkGoalNotification();
+	}
+
+	/**
+	 * Current goal progress in GP — persisted progress from earlier sessions
+	 * plus the live session's contribution, or the full target once complete.
+	 * Returns 0 when no goal is set. Read by the overlay and panel on the EDT.
+	 */
+	long goalDisplayTotal()
+	{
+		return goalTracker != null ? goalTracker.effectiveTotal() : 0L;
+	}
+
+	/**
+	 * Seconds tracked toward the current goal — persisted time from earlier
+	 * sessions plus the live session's tracked time (AFK included per config).
+	 * Feeds the blended cross-session goal ETA. Returns 0 when no goal is set.
+	 */
+	long goalDisplaySeconds()
+	{
+		return goalTracker != null ? goalTracker.effectiveSeconds() : 0L;
 	}
 
 	/**

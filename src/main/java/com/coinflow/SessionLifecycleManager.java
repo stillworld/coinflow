@@ -38,6 +38,10 @@ final class SessionLifecycleManager
 		{
 			plugin.activityMonitor.onLoginStarted();
 		}
+		if (state == GameState.LOADING && plugin.client != null)
+		{
+			plugin.activityMonitor.onSceneLoad(plugin.client.getTickCount());
+		}
 
 		if (state == GameState.LOGGED_IN)
 		{
@@ -67,6 +71,10 @@ final class SessionLifecycleManager
 			// alive, then drop the coffer baseline — the next read after
 			// relog only re-baselines.
 			plugin.blastFurnaceTracker.onLeftLoggedIn();
+			// Checkpoint goal progress at the relog boundary — the session
+			// survives logout, so only the delta since the last persist is
+			// written; a client close here loses nothing since the last hop.
+			plugin.goalTracker.persistSession();
 			resetTransientTrackingState();
 		}
 	}
@@ -103,6 +111,14 @@ final class SessionLifecycleManager
 	{
 		if (event.getGroup().equals(CoinFlowConfig.CONFIG_GROUP))
 		{
+			// Goal checkpoint writes are internal bookkeeping — ignore them so
+			// every persist doesn't rebuild the filter set or spam the log.
+			String changedKey = event.getKey();
+			if (changedKey != null && changedKey.startsWith(GoalTracker.PROGRESS_KEY_PREFIX))
+			{
+				return;
+			}
+
 			if ("goldDropMinThreshold".equals(event.getKey()))
 			{
 				String val = event.getNewValue();
@@ -154,6 +170,7 @@ final class SessionLifecycleManager
 			else if ("goalAmount".equals(event.getKey()))
 			{
 				plugin.goalCompletedNotified = false;
+				plugin.goalTracker.onGoalAmountChanged();
 				String val = event.getNewValue();
 				if (val != null)
 				{
@@ -359,7 +376,13 @@ final class SessionLifecycleManager
 				plugin.session.getActiveTime().getSeconds(), plugin.session.getTotalInGameTime().getSeconds(),
 				plugin.session.getGrossProfit(), plugin.session.getTotalExpenses(), plugin.session.isIdle());
 		}
+		// Persist the outgoing session's goal contribution before it is
+		// replaced. On account switch this still sees the previous hash —
+		// checkAccount updates lastAccountHash only after resetSession —
+		// so each account's progress lands under its own key.
+		plugin.goalTracker.persistSession();
 		plugin.session = CoinFlowSession.createNew();
+		plugin.goalTracker.onNewSession();
 		plugin.goalCompletedNotified = false;
 		plugin.barrowsWearBookedByPiece.clear();
 		plugin.grandExchangeTracker.reset();
@@ -367,6 +390,7 @@ final class SessionLifecycleManager
 		plugin.cannonTracker.reset();
 		plugin.blastFurnaceTracker.resetSession();
 		plugin.activityTimeline.reset();
+		plugin.profitHistory.reset();
 		if (plugin.client != null && plugin.client.getGameState() == GameState.LOGGED_IN)
 		{
 			plugin.grandExchangeTracker.seed(plugin.client.getGrandExchangeOffers());
@@ -450,9 +474,7 @@ final class SessionLifecycleManager
 		long goalAmount = CoinFlowSession.parseGoalAmount(plugin.config != null ? plugin.config.goalAmount() : null);
 		if (goalAmount > 0 && plugin.session != null)
 		{
-			long currentProfit = (plugin.config != null && !plugin.config.trackSpent())
-				? plugin.session.getGrossProfit() : plugin.session.getTotalProfit();
-			if (currentProfit < goalAmount)
+			if (!plugin.goalTracker.isComplete() && plugin.goalDisplayTotal() < goalAmount)
 			{
 				plugin.goalCompletedNotified = false;
 			}

@@ -16,6 +16,7 @@ public class ActivityTimelineTest
 		ActivityTimeline.ActivityClass.skilling("Mining");
 	private static final ActivityTimeline.ActivityClass BANKING = ActivityTimeline.ActivityClass.BANKING;
 	private static final ActivityTimeline.ActivityClass AFK = ActivityTimeline.ActivityClass.AFK;
+	private static final ActivityTimeline.ActivityClass TELEPORT = ActivityTimeline.ActivityClass.TELEPORT;
 
 	private static void tick(ActivityTimeline t, ActivityTimeline.ActivityClass cls)
 	{
@@ -318,5 +319,37 @@ public class ActivityTimelineTest
 		Assert.assertEquals(3, segs.size());
 		Assert.assertEquals("Banking / GE", segs.get(1).label);
 		Assert.assertEquals("Dagannoth Rex", segs.get(2).label);
+	}
+
+	@Test
+	public void teleport_usesQuickConfirm()
+	{
+		ActivityTimeline t = new ActivityTimeline();
+		idleTicks(t, VORKATH, 21);
+		idleTicks(t, TELEPORT, 5);
+		Assert.assertEquals("Teleport", t.getCurrentSegment().label);
+	}
+
+	@Test
+	public void shortTeleportGapBetweenSameActivity_foldsIntoRun()
+	{
+		// [Mining, Teleport, Mining] — the hop merges like a bank trip.
+		ActivityTimeline t = new ActivityTimeline();
+		for (int i = 0; i < 21; i++)
+		{
+			tick(t, MINING, 1000, 0);
+		}
+		idleTicks(t, TELEPORT, 5);
+		for (int i = 0; i < 21; i++)
+		{
+			tick(t, MINING, 2000, 0);
+		}
+
+		List<ActivityTimeline.Segment> segs = t.getSegments();
+		Assert.assertEquals(1, segs.size());
+		ActivityTimeline.Segment seg = segs.get(0);
+		Assert.assertEquals("Mining", seg.label);
+		Assert.assertEquals(TICK.multipliedBy(47), seg.totalTime);
+		Assert.assertEquals(2000, seg.gross);
 	}
 }

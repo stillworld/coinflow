@@ -436,4 +436,41 @@ public class CoinFlowOverlayTest
 		Assert.assertEquals("Compact single-line width uses compact padding and the small font",
 			graphics.getFontMetrics(FontManager.getRunescapeSmallFont()).stringWidth(expectedText) + 8, result.width);
 	}
+
+	@Test
+	public void goalBarName_shortName_passesThrough()
+	{
+		Assert.assertEquals("19m", CoinFlowOverlay.goalBarName("19m"));
+	}
+
+	@Test
+	public void goalBarName_fifteenCharName_passesThrough()
+	{
+		// "Saradomin Sword" regressed to "Sar.." when the cap covered the whole
+		// composed label — with percent/ETA placed separately the name keeps
+		// its full 20-char budget.
+		Assert.assertEquals("Saradomin Sword", CoinFlowOverlay.goalBarName("Saradomin Sword"));
+	}
+
+	@Test
+	public void goalBarName_longName_truncatesWithDots()
+	{
+		Assert.assertEquals("AnExtremelyLongGoa..",
+			CoinFlowOverlay.goalBarName("AnExtremelyLongGoalNameIndeed"));
+	}
+
+	@Test
+	public void goalBarName_neverExceeds20Chars()
+	{
+		Assert.assertTrue(CoinFlowOverlay.goalBarName("AnExtremelyLongGoalNameIndeed").length() <= 20);
+		Assert.assertTrue(CoinFlowOverlay.goalBarName("a name exactly twenty").length() <= 20);
+	}
+
+	@Test
+	public void goalBarName_compact_truncatesToTenWithEllipsis()
+	{
+		Assert.assertEquals("Saradom...", CoinFlowOverlay.goalBarName("Saradomin Sword", true));
+		Assert.assertEquals("Short", CoinFlowOverlay.goalBarName("Short", true));
+		Assert.assertTrue(CoinFlowOverlay.goalBarName("AnExtremelyLongGoalNameIndeed", true).length() <= 10);
+	}
 }

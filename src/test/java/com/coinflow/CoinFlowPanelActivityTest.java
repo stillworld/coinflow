@@ -49,9 +49,14 @@ public class CoinFlowPanelActivityTest
 
 	private void feed(ActivityTimeline.ActivityClass cls, int ticks)
 	{
+		feed(cls, ticks, 0, 0);
+	}
+
+	private void feed(ActivityTimeline.ActivityClass cls, int ticks, long gross, long expenses)
+	{
 		for (int i = 0; i < ticks; i++)
 		{
-			plugin.activityTimeline.onTick(cls, TICK, TICK, 0, 0);
+			plugin.activityTimeline.onTick(cls, TICK, TICK, gross, expenses);
 		}
 	}
 
@@ -67,8 +72,15 @@ public class CoinFlowPanelActivityTest
 	}
 
 	@Test
+	public void defaultView_isTotals()
+	{
+		Assert.assertTrue(panel.timelineTotalsView);
+	}
+
+	@Test
 	public void timelineView_listsEachStintNewestFirst()
 	{
+		panel.timelineTotalsView = false;
 		panel.refreshTimelineCardView();
 		Assert.assertEquals(4, rowCount());
 	}
@@ -85,6 +97,7 @@ public class CoinFlowPanelActivityTest
 	@Test
 	public void rows_showSkillIconsForSkillingAndCombat_noneForBanking()
 	{
+		panel.timelineTotalsView = false;
 		panel.refreshTimelineCardView();
 		// Newest first: Banking, Fire giant, Mining, Fire giant
 		Assert.assertNull("banking row has no icon", iconOf(0).getIcon());
@@ -102,5 +115,82 @@ public class CoinFlowPanelActivityTest
 			Component c = iconOf(i);
 			Assert.assertNull(((JLabel) c).getIcon());
 		}
+	}
+
+	private JLabel nameOf(int row)
+	{
+		JPanel textPanel = (JPanel) ((JPanel) panel.timelineContainer.getComponent(row + 1)).getComponent(1);
+		return (JLabel) textPanel.getComponent(0);
+	}
+
+	@Test
+	public void zeroNetOtherSegment_hiddenInTimelineAndTotals()
+	{
+		plugin.activityTimeline.reset();
+		// Unclassified bootstrap time closes as a zero-net "Other" row once
+		// combat confirms — it has nothing to report, so both views hide it.
+		feed(null, 30);
+		feed(ActivityTimeline.ActivityClass.combat("Fire giant"), 30);
+		panel.timelineTotalsView = false;
+		panel.refreshTimelineCardView();
+		Assert.assertEquals(1, rowCount());
+		Assert.assertEquals("Fire giant", nameOf(0).getText());
+
+		panel.timelineTotalsView = true;
+		panel.refreshTimelineCardView();
+		Assert.assertEquals(1, rowCount());
+		Assert.assertEquals("Fire giant", nameOf(0).getText());
+	}
+
+	@Test
+	public void otherSegment_showsOnceItCarriesGp()
+	{
+		plugin.activityTimeline.reset();
+		feed(null, 10);
+		plugin.activityTimeline.onTick(null, TICK, TICK, 5000, 0);
+		feed(ActivityTimeline.ActivityClass.combat("Fire giant"), 30, 5000, 0);
+		panel.timelineTotalsView = false;
+		panel.refreshTimelineCardView();
+		// Newest first: Fire giant, then the +5k "Other" row which carried a
+		// value and stays visible.
+		Assert.assertEquals(2, rowCount());
+		Assert.assertEquals("Other", nameOf(1).getText());
+	}
+
+	@Test
+	public void otherSegment_withExpensesOnly_isShown()
+	{
+		plugin.activityTimeline.reset();
+		feed(null, 10);
+		plugin.activityTimeline.onTick(null, TICK, TICK, 0, 3000);
+		feed(ActivityTimeline.ActivityClass.combat("Fire giant"), 30, 0, 3000);
+		panel.timelineTotalsView = false;
+		panel.refreshTimelineCardView();
+		// A -3k "Other" row is meaningful spend — shown in both views.
+		Assert.assertEquals(2, rowCount());
+		Assert.assertEquals("Other", nameOf(1).getText());
+
+		panel.timelineTotalsView = true;
+		panel.refreshTimelineCardView();
+		Assert.assertEquals(2, rowCount());
+	}
+
+	@Test
+	public void hiddenOtherRow_appearsWhenItGainsValue()
+	{
+		plugin.activityTimeline.reset();
+		// A live zero-net bootstrap "Other" is the only segment — the card
+		// falls back to the empty-state placeholder (one label, no rows).
+		feed(null, 30);
+		panel.timelineTotalsView = false;
+		panel.refreshTimelineCardView();
+		Assert.assertEquals(0, rowCount());
+
+		// First gp lands mid-segment — no revision bump, so the per-tick
+		// update detects the row-set change and rebuilds to reveal it.
+		plugin.activityTimeline.onTick(null, TICK, TICK, 5000, 0);
+		panel.updateLiveSegmentRow();
+		Assert.assertEquals(1, rowCount());
+		Assert.assertEquals("Other", nameOf(0).getText());
 	}
 }

@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -8,6 +9,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -15,9 +17,11 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
+import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -82,10 +86,11 @@ public class CoinFlowPanel extends PluginPanel
 	private final JButton configButton = new JButton();
 
 	// ── Session Summary UI ───────────────────────────────────────────────
-	private final JPanel sessionCard = new JPanel();
+	final JPanel sessionCard = new JPanel();
 	private final JLabel sessionCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
 	private final JLabel sessionProfitCaption = new JLabel("Net Profit", SwingConstants.CENTER);
 	private final JLabel sessionProfitLabel = new JLabel("0 gp", SwingConstants.CENTER);
+	final SparklinePanel sessionSparkline = new SparklinePanel();
 	private final JLabel sessionRateLabel = new JLabel("0 gp/hr", SwingConstants.RIGHT);
 	private final JLabel sessionTimeLabel = new JLabel("00:00", SwingConstants.RIGHT);
 	private final JLabel sessionGrossLabel = new JLabel("+0 gp", SwingConstants.RIGHT);
@@ -129,7 +134,7 @@ public class CoinFlowPanel extends PluginPanel
 	private final List<ActivityRow> activityRows = new ArrayList<>();
 	private final Map<Skill, ImageIcon> skillIcons = new EnumMap<>(Skill.class);
 	/** Timeline vs Totals view; a field (like itemFilter) so it doesn't churn persisted settings. */
-	boolean timelineTotalsView = false;
+	boolean timelineTotalsView = true;
 
 	// ── Item Breakdown UI Components ─────────────────────────────────────
 	private final JPanel itemsCard = new JPanel();
@@ -462,7 +467,7 @@ public class CoinFlowPanel extends PluginPanel
 		headerPanel.repaint();
 	}
 
-	private void refreshSessionCardView()
+	void refreshSessionCardView()
 	{
 		sessionCard.removeAll();
 		sessionCard.setLayout(new GridBagLayout());
@@ -534,11 +539,20 @@ public class CoinFlowPanel extends PluginPanel
 		c.gridy++;
 
 		// Profit Value
+		boolean sparkline = config.showSparkline();
 		sessionProfitLabel.setFont(FontManager.getRunescapeBoldFont());
 		sessionProfitLabel.setHorizontalAlignment(SwingConstants.CENTER);
-		c.insets = new Insets(0, 0, 10, 0);
+		c.insets = new Insets(0, 0, sparkline ? 4 : 10, 0);
 		card.add(sessionProfitLabel, c);
 		c.gridy++;
+
+		// Optional cumulative-profit sparkline (standard layout only)
+		if (sparkline)
+		{
+			c.insets = new Insets(0, 0, 10, 0);
+			card.add(sessionSparkline, c);
+			c.gridy++;
+		}
 
 		// Rate, Time, Gross Loot & Supplies Grid
 		sessionStatsGrid.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -691,8 +705,8 @@ public class CoinFlowPanel extends PluginPanel
 		if (hasActiveGoal)
 		{
 			CoinFlowSession session = plugin.getSession();
-			double progress = session != null ? session.getGoalProgress(goalAmount, config.trackSpent()) : 0.0;
-			goalCollapsedPreviewLabel.setText(String.format("%.0f%%", progress * 100));
+			double progress = session != null ? session.getGoalProgress(goalAmount, plugin.goalDisplayTotal()) : 0.0;
+			goalCollapsedPreviewLabel.setText(String.format("%.1f%%", progress * 100));
 			goalCollapsedPreviewLabel.setForeground(progress >= 1.0 ? GOAL_COMPLETE_GREEN : GOAL_IN_PROGRESS_ORANGE);
 		}
 		else
@@ -929,8 +943,11 @@ public class CoinFlowPanel extends PluginPanel
 			timelineContainer.removeAll();
 			timelineContainer.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 
-			if (segments.isEmpty())
+			List<RowStats> stats = currentRowStats(segments);
+			if (stats.isEmpty())
 			{
+				// Nothing to report — no segments at all, or only the
+				// bootstrap "Other" bucket which hides while zero-net.
 				timelineContainer.setLayout(new BorderLayout());
 				JLabel emptyLabel = new JLabel("<html><div style='text-align:center'>No activity yet<br>"
 					+ "Fight, skill, or bank to see<br>the GP from each activity.</div></html>", SwingConstants.CENTER);
@@ -944,7 +961,6 @@ public class CoinFlowPanel extends PluginPanel
 				timelineContainer.setLayout(new DynamicGridLayout(0, 1, 0, compact ? 2 : 4));
 				timelineContainer.add(buildTimelineViewBar());
 
-				List<RowStats> stats = currentRowStats(segments);
 				long totalSecs = totalSeconds(stats);
 				int shown = Math.min(stats.size(), MAX_SEGMENT_ROWS);
 				for (int i = 0; i < shown; i++)
@@ -1009,7 +1025,8 @@ public class CoinFlowPanel extends PluginPanel
 	 * Display rows for the active view, in display order: timeline is the
 	 * segment list newest-first; totals collapses same-activity segments
 	 * (longest total time first). The live flag marks the row containing the
-	 * current segment.
+	 * current segment. Zero-net "Other" rows are omitted — the bootstrap
+	 * bucket has nothing to report until it carries a value.
 	 */
 	private List<RowStats> currentRowStats(List<ActivityTimeline.Segment> segments)
 	{
@@ -1023,7 +1040,11 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			for (int i = segments.size() - 1; i >= 0; i--)
 			{
-				rows.add(RowStats.of(segments.get(i), i == segments.size() - 1));
+				RowStats row = RowStats.of(segments.get(i), i == segments.size() - 1);
+				if (!isEmptyOther(row))
+				{
+					rows.add(row);
+				}
 			}
 			return rows;
 		}
@@ -1037,9 +1058,23 @@ public class CoinFlowPanel extends PluginPanel
 		for (ActivityTimeline.Aggregate agg : plugin.activityTimeline.aggregateByLabel())
 		{
 			String key = RowStats.key(agg.kind, agg.label);
-			rows.add(RowStats.of(agg, visits.getOrDefault(key, 1), key.equals(liveKey)));
+			RowStats row = RowStats.of(agg, visits.getOrDefault(key, 1), key.equals(liveKey));
+			if (!isEmptyOther(row))
+			{
+				rows.add(row);
+			}
 		}
 		return rows;
+	}
+
+	/**
+	 * "Other" is the session's bootstrap bucket — time before any activity
+	 * signal confirms. A zero-net row is pure noise, so it stays hidden
+	 * until it carries a positive or negative GP value.
+	 */
+	private static boolean isEmptyOther(RowStats stats)
+	{
+		return stats.kind == ActivityTimeline.Kind.OTHER && stats.net() == 0;
 	}
 
 	private static long totalSeconds(List<RowStats> rows)
@@ -1122,6 +1157,8 @@ public class CoinFlowPanel extends PluginPanel
 				return new Color(0xD8, 0x8A, 0x2C);
 			case BANKING:
 				return new Color(0x4C, 0x8C, 0xC8);
+			case TELEPORT:
+				return new Color(0x9B, 0x5C, 0xC8);
 			default:
 				return ColorScheme.MEDIUM_GRAY_COLOR;
 		}
@@ -1145,6 +1182,9 @@ public class CoinFlowPanel extends PluginPanel
 				break;
 			case SKILLING:
 				skill = skillByName(label);
+				break;
+			case TELEPORT:
+				skill = Skill.MAGIC;
 				break;
 			default:
 				skill = null;
@@ -1265,7 +1305,7 @@ public class CoinFlowPanel extends PluginPanel
 	 * re-sorts by time, so position isn't stable there) or by position in the
 	 * timeline view, where duplicate keys are expected.
 	 */
-	private void updateLiveSegmentRow()
+	void updateLiveSegmentRow()
 	{
 		if (plugin.activityTimeline == null)
 		{
@@ -1277,12 +1317,20 @@ public class CoinFlowPanel extends PluginPanel
 			return;
 		}
 		timelineCollapsedPreviewLabel.setText(segments.get(segments.size() - 1).label);
+
+		List<RowStats> stats = currentRowStats(segments);
+		// A zero-net "Other" row gaining or losing its first value changes the
+		// rendered row set without a timeline revision bump — rebuild so the
+		// row appears or disappears instead of going stale.
+		if (activityRows.size() != Math.min(stats.size(), MAX_SEGMENT_ROWS))
+		{
+			refreshTimelineCardView();
+			return;
+		}
 		if (activityRows.isEmpty())
 		{
 			return;
 		}
-
-		List<RowStats> stats = currentRowStats(segments);
 		long totalSecs = totalSeconds(stats);
 		Map<String, RowStats> byKey = new HashMap<>();
 		if (timelineTotalsView)
@@ -1415,6 +1463,101 @@ public class CoinFlowPanel extends PluginPanel
 	 * session time, tinted by activity kind — where the time went, readable
 	 * without parsing any numbers.
 	 */
+	/**
+	 * Minimal cumulative-profit line: no axes or labels, a faint zero line
+	 * when the series crosses zero, stroke coloured by the latest value.
+	 * Repaints only when the snapshot revision changes.
+	 */
+	static final class SparklinePanel extends JPanel
+	{
+		static final int HEIGHT = 28;
+		private static final int PAD_Y = 2;
+
+		private ProfitHistory.Snapshot snapshot = ProfitHistory.Snapshot.EMPTY;
+
+		SparklinePanel()
+		{
+			setBackground(ColorScheme.DARKER_GRAY_COLOR);
+			setPreferredSize(new Dimension(0, HEIGHT));
+			setMinimumSize(new Dimension(0, HEIGHT));
+		}
+
+		void setSnapshot(ProfitHistory.Snapshot next)
+		{
+			if (next != null && next.revision != snapshot.revision)
+			{
+				snapshot = next;
+				repaint();
+			}
+		}
+
+		ProfitHistory.Snapshot getSnapshot()
+		{
+			return snapshot;
+		}
+
+		@Override
+		protected void paintComponent(Graphics g)
+		{
+			super.paintComponent(g);
+			long[] values = snapshot.values;
+			if (values.length < 2)
+			{
+				return;
+			}
+
+			int w = getWidth();
+			int h = getHeight();
+			int plotH = h - 2 * PAD_Y;
+			if (w <= 1 || plotH <= 0)
+			{
+				return;
+			}
+
+			long min = snapshot.min;
+			long max = snapshot.max;
+			double range = max - min;
+			Graphics2D g2 = (Graphics2D) g.create();
+			try
+			{
+				g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+				if (min < 0 && max > 0)
+				{
+					int zeroY = PAD_Y + (int) Math.round(plotH * (max / range));
+					g2.setColor(ColorScheme.DARK_GRAY_HOVER_COLOR);
+					g2.drawLine(0, zeroY, w, zeroY);
+				}
+
+				Path2D.Double path = new Path2D.Double();
+				double xStep = (double) (w - 1) / (values.length - 1);
+				for (int i = 0; i < values.length; i++)
+				{
+					double x = i * xStep;
+					// Flat series (range 0) sits on the vertical centre line.
+					double y = range == 0
+						? PAD_Y + plotH / 2.0
+						: PAD_Y + plotH * ((max - values[i]) / range);
+					if (i == 0)
+					{
+						path.moveTo(x, y);
+					}
+					else
+					{
+						path.lineTo(x, y);
+					}
+				}
+				g2.setColor(values[values.length - 1] >= 0 ? PROFIT_GREEN : WARN_ORANGE);
+				g2.setStroke(new BasicStroke(1.5f));
+				g2.draw(path);
+			}
+			finally
+			{
+				g2.dispose();
+			}
+		}
+	}
+
 	private static final class ShareBarPanel extends JPanel
 	{
 		private final Color barColor;
@@ -2097,6 +2240,11 @@ public class CoinFlowPanel extends PluginPanel
 		sessionCollapsedPreviewLabel.setText((totalProfit < 0 ? "-" : "") + QuantityFormatter.quantityToStackSize(Math.abs(totalProfit)) + " gp");
 		sessionCollapsedPreviewLabel.setForeground(totalProfit >= 0 ? PROFIT_GREEN : WARN_ORANGE);
 
+		if (sessionSparkline.getParent() != null)
+		{
+			sessionSparkline.setSnapshot(plugin.profitHistory.snapshot());
+		}
+
 		if (trackSpent)
 		{
 			sessionGrossLabel.setText("+" + QuantityFormatter.formatNumber(session.getGrossProfit()) + " gp");
@@ -2206,9 +2354,10 @@ public class CoinFlowPanel extends PluginPanel
 
 	private void applySessionToGoal(CoinFlowSession session, long goalAmount)
 	{
-		boolean includeAfk = config.includeAfkTime();
-		boolean trackSpent = config.trackSpent();
-		double progress = session.getGoalProgress(goalAmount, trackSpent);
+		// goalDisplayTotal folds persisted cross-session progress into the live
+		// session contribution (full target once the goal is marked complete).
+		long goalTotal = plugin.goalDisplayTotal();
+		double progress = session.getGoalProgress(goalAmount, goalTotal);
 		int percent = (int) Math.round(progress * 100);
 		goalProgressBar.setValue(percent);
 		goalProgressBar.setString(percent + "%");
@@ -2216,21 +2365,21 @@ public class CoinFlowPanel extends PluginPanel
 		boolean complete = progress >= 1.0;
 		goalProgressBar.setForeground(complete ? GOAL_COMPLETE_GREEN : GOAL_IN_PROGRESS_ORANGE);
 
-		long currentProfit = Math.max(0L, trackSpent ? session.getTotalProfit() : session.getGrossProfit());
 		goalProgressNumbers.setText(
-			QuantityFormatter.quantityToStackSize(currentProfit) + " / " +
+			QuantityFormatter.quantityToStackSize(Math.max(0L, goalTotal)) + " / " +
 			QuantityFormatter.quantityToStackSize(goalAmount) + " gp (" +
 			String.format("%.1f%%", progress * 100) + ")"
 		);
 
-		long remaining = session.getGoalRemaining(goalAmount, trackSpent);
+		long remaining = session.getGoalRemaining(goalAmount, goalTotal);
 		goalRemainingValue.setText(QuantityFormatter.formatNumber(remaining) + " gp");
 
-		long etaSeconds = session.getGoalEtaSeconds(goalAmount, includeAfk, trackSpent);
+		// Blended cross-session rate — same ETA basis as the overlay.
+		long etaSeconds = session.getGoalEtaSeconds(goalAmount, goalTotal, plugin.goalDisplaySeconds());
 		goalEtaValue.setText(CoinFlowSession.formatGoalEta(etaSeconds));
 		goalEtaValue.setForeground(complete ? PROFIT_GREEN : WARN_ORANGE);
 
-		goalCollapsedPreviewLabel.setText(String.format("%.0f%%", progress * 100));
+		goalCollapsedPreviewLabel.setText(String.format("%.1f%%", progress * 100));
 		goalCollapsedPreviewLabel.setForeground(complete ? GOAL_COMPLETE_GREEN : GOAL_IN_PROGRESS_ORANGE);
 	}
 
