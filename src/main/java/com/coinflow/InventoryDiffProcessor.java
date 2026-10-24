@@ -142,7 +142,10 @@ final class InventoryDiffProcessor
 							int addedId = plugin.itemManager != null ? plugin.itemManager.canonicalize(addedEntry.getKey()) : addedEntry.getKey();
 							String addedName = plugin.getItemName(addedId);
 
-							if (com.coinflow.reconciliation.ChargeDegradationHandler.isChargeDegradationPair(removedName, addedName))
+							if (com.coinflow.reconciliation.ChargeDegradationHandler.isChargeDegradationPair(removedName, addedName)
+								// Raw ids: ItemMapping canonicalizes moon used variants
+								// onto the new id, so canonical ids would never differ.
+								|| com.coinflow.reconciliation.MoonWear.isRepairOrDegradePair(removedEntry.getKey(), addedEntry.getKey()))
 							{
 								int match = Math.min(removedEntry.getValue(), addedEntry.getValue());
 

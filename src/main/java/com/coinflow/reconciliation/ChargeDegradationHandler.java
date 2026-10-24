@@ -25,6 +25,12 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	// Matches Barrows degrade stages: "Dharok's helm 100" -> 75 -> 50 -> 25 -> 0
 	private static final Pattern BARROWS_PATTERN = Pattern.compile("^(.*?)\\s+(100|75|50|25|0)$");
 
+	// Matches repair/recharge-state suffixes: "Blood moon chestplate (broken)",
+	// "Torva platelegs (broken)", "Dragonfire shield (uncharged)". "(u)" is
+	// deliberately excluded — it means unstrung in fletching (Magic longbow (u)),
+	// where the transition is production, not a state change on the same item.
+	private static final Pattern BROKEN_PATTERN = Pattern.compile("^(.*?)\\s+\\((broken|uncharged)\\)$", Pattern.CASE_INSENSITIVE);
+
 	// Matches imbued variants: "Seers ring (i)", "Slayer helmet (i)",
 	// "Salve amulet(ei)", "Ring of suffering (ri)". All are untradeable.
 	private static final Pattern IMBUED_PATTERN = Pattern.compile("^(.*?)\\s*\\((i|ei|ri)\\)$", Pattern.CASE_INSENSITIVE);
@@ -109,7 +115,11 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 					String gainedName = context.getItemName(canonicalGainedId);
 
 					if (isUsageStepPair(lostName, gainedName)
-						|| isLightSourcePair(canonicalLostId, canonicalGainedId, lostName, gainedName))
+						|| isLightSourcePair(canonicalLostId, canonicalGainedId, lostName, gainedName)
+						// Moon pairing needs the raw ids: ItemMapping canonicalizes the
+						// used variant onto the new id, so a used->new repair diff would
+						// otherwise compare identical ids and never pair.
+						|| MoonWear.isRepairOrDegradePair(lostId, gainedId))
 					{
 						gainedMatchId = gainedId;
 						break;
@@ -186,7 +196,7 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 				String gainedName = context.getItemName(canonicalGainedId);
 				if (isPartiallyDegraded(gainedName) || isLitLightSource(canonicalGainedId, gainedName)
-					|| isImbuedVariant(gainedName))
+					|| isImbuedVariant(gainedName) || MoonWear.isUsedVariant(gainedId))
 				{
 					rawGains.remove(gainedId);
 					log.debug("Suppressed partially degraded, lit, or imbued item from profit gains: {}", gainedName);
@@ -198,8 +208,9 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	/**
 	 * Checks if lostName transitioned into gainedName via a charge or degrade-state
 	 * change on the same item: degradation (Slayer ring (3) -> (2)), depletion
-	 * ((1) -> uncharged), recharge ((2) -> (4), base -> (4)), or Barrows repair /
-	 * first-use ("X 50" -> "X", "X" -> "X 100").
+	 * ((1) -> uncharged), recharge ((2) -> (4), base -> (4)), or repairs —
+	 * Barrows ("X 50" -> "X", first-use "X" -> "X 100") and broken gear
+	 * ("X (broken)" -> "X", "X (uncharged)" -> "X").
 	 */
 	public static boolean isChargeDegradationPair(String lostName, String gainedName)
 	{
@@ -247,7 +258,29 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				&& (lostStaged && gainedStaged || isBarrowsBrotherItem(lostBase));
 		}
 
-		// 4. Imbue conversions: the same base item gaining or swapping the
+		// 4. Broken gear repair: "(broken)" appended to the broken variant's
+		//    display name makes this a strict same-base comparison in either
+		//    direction. The pairing is NPC-agnostic — the diff looks identical
+		//    whether the repair came from Bob or a POH armour stand (Torva,
+		//    ornamented Barrows) or from Perdu (PvP-death breakables: capes,
+		//    defenders, sceptres, trouver-locked gear). "(uncharged)" covers
+		//    DFS-family recharges where the two forms are different ids. The
+		//    fee (and any consumed charge material) is left to the cash-spend
+		//    path. Moons of Peril repairs resolve by id via MoonWear before
+		//    this rule is even needed, since their states share one display
+		//    name.
+		Matcher brokenLost = BROKEN_PATTERN.matcher(lostName);
+		Matcher brokenGained = BROKEN_PATTERN.matcher(gainedName);
+		boolean lostBroken = brokenLost.matches();
+		boolean gainedBroken = brokenGained.matches();
+		if (lostBroken || gainedBroken)
+		{
+			String lostBase = lostBroken ? brokenLost.group(1).trim() : lostName.trim();
+			String gainedBase = gainedBroken ? brokenGained.group(1).trim() : gainedName.trim();
+			return lostBase.equalsIgnoreCase(gainedBase);
+		}
+
+		// 5. Imbue conversions: the same base item gaining or swapping the
 		//    imbued suffix (Seers ring -> Seers ring (i), Salve amulet(i) ->
 		//    Salve amulet(ei), Ring of suffering (r) -> Ring of suffering (ri))
 		//    via NMZ, Soul Wars, or Emir's Arena rewards. Imbued items are

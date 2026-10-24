@@ -1,5 +1,6 @@
 package com.coinflow;
 
+import com.coinflow.reconciliation.MoonWear;
 import java.util.Map;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.ItemID;
@@ -156,13 +157,23 @@ final class ActionClassifiers
 		{
 			return false;
 		}
+		boolean hasNonCoinGain = false;
 		for (int gainedId : rawGains.keySet())
 		{
-			if (gainedId != ItemID.COINS && gainedId != ItemID.PLATINUM)
+			if (gainedId == ItemID.COINS || gainedId == ItemID.PLATINUM)
 			{
-				return true;
+				continue;
 			}
+			if (MoonWear.isMoonVariant(gainedId))
+			{
+				// Moon variants aren't purchasable mid-degradation — coins
+				// paid alongside one are a repair fee, not a purchase. The
+				// repair returns the tradeable new variant, so skip it too.
+				// Keep checking: a real purchase may share the diff.
+				continue;
+			}
+			hasNonCoinGain = true;
 		}
-		return false;
+		return hasNonCoinGain;
 	}
 }
