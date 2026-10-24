@@ -936,14 +936,14 @@ public class ChargeDegradationHandlerTest
 	@Test
 	public void unchargedRecharge_unchargedToCharged_cancelsGainsAndLosses()
 	{
-		stubItem(11284, "Dragonfire shield (uncharged)", 16000000L);
-		stubItem(11283, "Dragonfire shield", 17000000L);
+		stubItem(ItemID.DRAGONFIRE_SHIELD_UNCHARGED, "Dragonfire shield (uncharged)", 16000000L);
+		stubItem(ItemID.DRAGONFIRE_SHIELD, "Dragonfire shield", 17000000L);
 
 		Map<Integer, Integer> rawGains = new HashMap<>();
-		rawGains.put(11283, 1); // shield charged by dragonfire
+		rawGains.put(ItemID.DRAGONFIRE_SHIELD, 1); // shield charged by dragonfire
 
 		Map<Integer, Integer> rawLosses = new HashMap<>();
-		rawLosses.put(11284, 1); // uncharged shield converted
+		rawLosses.put(ItemID.DRAGONFIRE_SHIELD_UNCHARGED, 1); // uncharged shield converted
 
 		ReconciliationContext context = new ReconciliationContext(
 			rawGains,
