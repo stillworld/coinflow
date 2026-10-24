@@ -257,12 +257,13 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 
 		// 4. Broken gear repair: "(broken)" appended to the broken variant's
 		//    display name makes this a strict same-base comparison in either
-		//    direction, covering every Bob/armour-stand repairable (Torva, the
-		//    PvP-death breakables — capes, defenders, sceptres, trouver-locked
-		//    gear — and ornamented Barrows) whose broken ids we don't track.
-		//    "(uncharged)" covers DFS-family recharges where the charged and
-		//    uncharged forms are different ids. The fee (and any consumed
-		//    charge material) is left to the cash-spend path. Moons of Peril repairs resolve by id via MoonWear before
+		//    direction. The pairing is NPC-agnostic — the diff looks identical
+		//    whether the repair came from Bob or a POH armour stand (Torva,
+		//    ornamented Barrows) or from Perdu (PvP-death breakables: capes,
+		//    defenders, sceptres, trouver-locked gear). "(uncharged)" covers
+		//    DFS-family recharges where the two forms are different ids. The
+		//    fee (and any consumed charge material) is left to the cash-spend
+		//    path. Moons of Peril repairs resolve by id via MoonWear before
 		//    this rule is even needed, since their states share one display
 		//    name.
 		Matcher brokenLost = BROKEN_PATTERN.matcher(lostName);
