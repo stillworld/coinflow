@@ -142,7 +142,8 @@ final class InventoryDiffProcessor
 							int addedId = plugin.itemManager != null ? plugin.itemManager.canonicalize(addedEntry.getKey()) : addedEntry.getKey();
 							String addedName = plugin.getItemName(addedId);
 
-							if (com.coinflow.reconciliation.ChargeDegradationHandler.isChargeDegradationPair(removedName, addedName))
+							if (com.coinflow.reconciliation.ChargeDegradationHandler.isChargeDegradationPair(removedName, addedName)
+								|| com.coinflow.reconciliation.MoonWear.isRepairOrDegradePair(removedId, addedId))
 							{
 								int match = Math.min(removedEntry.getValue(), addedEntry.getValue());
 

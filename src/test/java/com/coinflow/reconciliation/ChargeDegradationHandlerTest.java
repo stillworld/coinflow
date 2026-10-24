@@ -768,4 +768,95 @@ public class ChargeDegradationHandlerTest
 		Assert.assertTrue("Imbued variant gains must be suppressed as conversion artifacts",
 			context.getRawGains().isEmpty());
 	}
+
+	// ── Moons of Peril repairs ─────────────────────────────────────────
+
+	@Test
+	public void moonRepair_brokenToUsed_cancelsGainsAndLosses_leavesFee()
+	{
+		stubItem(29067, "Blood moon chestplate (broken)", 0L);
+		stubItem(29043, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.COINS, "Coins", 1L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(29043, 1); // repaired chestplate from the armour stand
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(29067, 1);            // broken chestplate handed in
+		rawLosses.put(ItemID.COINS, 757500); // repair fee at 99 Smithing
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Repaired chestplate must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertEquals("Only the repair fee remains in losses for the cash handler",
+			java.util.Collections.singletonMap(ItemID.COINS, 757500), context.getRawLosses());
+		Assert.assertEquals("Moon wear is not accrued — no repair allowance",
+			0L, context.getBarrowsRepairAllowanceGp());
+	}
+
+	@Test
+	public void moonUsedVariant_aloneInRawGains_suppressedFromGains()
+	{
+		stubItem(29043, "Blood moon chestplate", 2791852L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(29043, 1); // repaired chestplate landing without its loss
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("A used-variant gain is always a conversion artifact",
+			context.getRawGains().isEmpty());
+	}
+
+	@Test
+	public void moonNewVariant_aloneInRawGains_survivesAsLoot()
+	{
+		stubItem(29022, "Blood moon chestplate", 2791852L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(29022, 1); // Lunar Chest drop
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
+			null, null, CoinFlowSession.createNew(), itemManager, config, null);
+
+		handler.reconcile(context);
+
+		Assert.assertEquals("A new-variant gain is real loot from the Lunar Chest",
+			java.util.Collections.singletonMap(29022, 1), context.getRawGains());
+	}
+
+	@Test
+	public void brokenRepair_pairing_matchesSameBase()
+	{
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
+			"Blood moon chestplate (broken)", "Blood moon chestplate"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
+			"Blood moon chestplate", "Blood moon chestplate (broken)"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
+			"Torva platelegs (broken)", "Torva platelegs"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
+			"Blood moon chestplate (broken)", "Eclipse moon chestplate"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
+			"Blood moon chestplate", "Blood moon chestplate"));
+	}
 }
