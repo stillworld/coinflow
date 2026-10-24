@@ -774,16 +774,16 @@ public class ChargeDegradationHandlerTest
 	@Test
 	public void moonRepair_brokenToUsed_cancelsGainsAndLosses_leavesFee()
 	{
-		stubItem(29067, "Blood moon chestplate (broken)", 0L);
-		stubItem(29043, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, "Blood moon chestplate (broken)", 0L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, "Blood moon chestplate", 2791852L);
 		stubItem(ItemID.COINS, "Coins", 1L);
 
 		Map<Integer, Integer> rawGains = new HashMap<>();
-		rawGains.put(29043, 1); // repaired chestplate from the armour stand
+		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, 1); // repaired chestplate from the armour stand
 
 		Map<Integer, Integer> rawLosses = new HashMap<>();
-		rawLosses.put(29067, 1);            // broken chestplate handed in
-		rawLosses.put(ItemID.COINS, 757500); // repair fee at 99 Smithing
+		rawLosses.put(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, 1); // broken chestplate handed in
+		rawLosses.put(ItemID.COINS, 757500);                  // repair fee at 99 Smithing
 
 		ReconciliationContext context = new ReconciliationContext(
 			rawGains,
@@ -812,10 +812,10 @@ public class ChargeDegradationHandlerTest
 	@Test
 	public void moonUsedVariant_aloneInRawGains_suppressedFromGains()
 	{
-		stubItem(29043, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, "Blood moon chestplate", 2791852L);
 
 		Map<Integer, Integer> rawGains = new HashMap<>();
-		rawGains.put(29043, 1); // repaired chestplate landing without its loss
+		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, 1); // repaired chestplate landing without its loss
 
 		ReconciliationContext context = new ReconciliationContext(
 			rawGains, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
@@ -830,10 +830,10 @@ public class ChargeDegradationHandlerTest
 	@Test
 	public void moonNewVariant_aloneInRawGains_survivesAsLoot()
 	{
-		stubItem(29022, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE, "Blood moon chestplate", 2791852L);
 
 		Map<Integer, Integer> rawGains = new HashMap<>();
-		rawGains.put(29022, 1); // Lunar Chest drop
+		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE, 1); // Lunar Chest drop
 
 		ReconciliationContext context = new ReconciliationContext(
 			rawGains, new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>(),
@@ -842,7 +842,77 @@ public class ChargeDegradationHandlerTest
 		handler.reconcile(context);
 
 		Assert.assertEquals("A new-variant gain is real loot from the Lunar Chest",
-			java.util.Collections.singletonMap(29022, 1), context.getRawGains());
+			java.util.Collections.singletonMap(ItemID.BLOOD_MOON_CHESTPLATE, 1), context.getRawGains());
+	}
+
+	@Test
+	public void torvaRepair_brokenToBase_cancelsGainsAndLosses_leavesFee()
+	{
+		stubItem(ItemID.BROKEN_TORVA_LEGS, "Torva platelegs (broken)", 0L);
+		stubItem(ItemID.TORVA_LEGS, "Torva platelegs", 340000000L);
+		stubItem(ItemID.COINS, "Coins", 1L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(ItemID.TORVA_LEGS, 1); // repaired platelegs from Bob
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(ItemID.BROKEN_TORVA_LEGS, 1); // broken platelegs handed in
+		rawLosses.put(ItemID.COINS, 500000); // repair fee
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Repaired platelegs must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertEquals("Only the repair fee remains in losses for the cash handler",
+			java.util.Collections.singletonMap(ItemID.COINS, 500000), context.getRawLosses());
+	}
+
+	@Test
+	public void unchargedRecharge_unchargedToCharged_cancelsGainsAndLosses()
+	{
+		stubItem(11284, "Dragonfire shield (uncharged)", 16000000L);
+		stubItem(11283, "Dragonfire shield", 17000000L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(11283, 1); // shield charged by dragonfire
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(11284, 1); // uncharged shield converted
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Charged shield must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertTrue("Uncharged shield loss must cancel against the charge conversion",
+			context.getRawLosses().isEmpty());
 	}
 
 	@Test
@@ -854,9 +924,19 @@ public class ChargeDegradationHandlerTest
 			"Blood moon chestplate", "Blood moon chestplate (broken)"));
 		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
 			"Torva platelegs (broken)", "Torva platelegs"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
+			"Infernal cape (broken)", "Infernal cape"));
+		Assert.assertTrue(ChargeDegradationHandler.isChargeDegradationPair(
+			"Dragonfire shield (uncharged)", "Dragonfire shield"));
 		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
 			"Blood moon chestplate (broken)", "Eclipse moon chestplate"));
 		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
 			"Blood moon chestplate", "Blood moon chestplate"));
+		// "(u)" means unstrung in fletching (Magic longbow (u) -> Magic
+		// longbow is production), so it is deliberately not paired.
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
+			"Magic longbow (u)", "Magic longbow"));
+		Assert.assertFalse(ChargeDegradationHandler.isChargeDegradationPair(
+			"Webweaver bow (u)", "Webweaver bow"));
 	}
 }

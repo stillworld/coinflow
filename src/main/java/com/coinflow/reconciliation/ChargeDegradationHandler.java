@@ -25,9 +25,11 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	// Matches Barrows degrade stages: "Dharok's helm 100" -> 75 -> 50 -> 25 -> 0
 	private static final Pattern BARROWS_PATTERN = Pattern.compile("^(.*?)\\s+(100|75|50|25|0)$");
 
-	// Matches broken repairables: "Blood moon chestplate (broken)",
-	// "Torva platelegs (broken)".
-	private static final Pattern BROKEN_PATTERN = Pattern.compile("^(.*?)\\s+\\(broken\\)$", Pattern.CASE_INSENSITIVE);
+	// Matches repair/recharge-state suffixes: "Blood moon chestplate (broken)",
+	// "Torva platelegs (broken)", "Dragonfire shield (uncharged)". "(u)" is
+	// deliberately excluded — it means unstrung in fletching (Magic longbow (u)),
+	// where the transition is production, not a state change on the same item.
+	private static final Pattern BROKEN_PATTERN = Pattern.compile("^(.*?)\\s+\\((broken|uncharged)\\)$", Pattern.CASE_INSENSITIVE);
 
 	// Matches imbued variants: "Seers ring (i)", "Slayer helmet (i)",
 	// "Salve amulet(ei)", "Ring of suffering (ri)". All are untradeable.
@@ -205,7 +207,7 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 	 * change on the same item: degradation (Slayer ring (3) -> (2)), depletion
 	 * ((1) -> uncharged), recharge ((2) -> (4), base -> (4)), or repairs —
 	 * Barrows ("X 50" -> "X", first-use "X" -> "X 100") and broken gear
-	 * ("X (broken)" -> "X").
+	 * ("X (broken)" -> "X", "X (uncharged)" -> "X").
 	 */
 	public static boolean isChargeDegradationPair(String lostName, String gainedName)
 	{
@@ -255,10 +257,14 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 
 		// 4. Broken gear repair: "(broken)" appended to the broken variant's
 		//    display name makes this a strict same-base comparison in either
-		//    direction. Moons of Peril repairs resolve by id via MoonWear
-		//    before this rule is even needed, but the name pair covers other
-		//    repairables (Torva, Voidwaker, ...) whose broken ids we don't
-		//    track. The repair fee is left to the cash-spend path.
+		//    direction, covering every Bob/armour-stand repairable (Torva, the
+		//    PvP-death breakables — capes, defenders, sceptres, trouver-locked
+		//    gear — and ornamented Barrows) whose broken ids we don't track.
+		//    "(uncharged)" covers DFS-family recharges where the charged and
+		//    uncharged forms are different ids. The fee (and any consumed
+		//    charge material) is left to the cash-spend path. Moons of Peril repairs resolve by id via MoonWear before
+		//    this rule is even needed, since their states share one display
+		//    name.
 		Matcher brokenLost = BROKEN_PATTERN.matcher(lostName);
 		Matcher brokenGained = BROKEN_PATTERN.matcher(gainedName);
 		boolean lostBroken = brokenLost.matches();
