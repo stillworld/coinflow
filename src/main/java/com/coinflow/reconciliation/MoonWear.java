@@ -7,9 +7,11 @@ import net.runelite.api.gameval.ItemID;
  * ids — new (tradeable), used (degraded, untradeable), and broken — sharing
  * one display name (the broken form appends " (broken)"). Degradation
  * mutates the id in place: new -> used on first combat use, used -> broken
- * at 0 charges; a repair stand or NPC repair returns the used variant.
- * Individual charges are invisible to inventory diffs, so unlike Barrows no
- * wear can be accrued during combat — the repair fee itself is the expense.
+ * at 0 charges; a repair stand or NPC repair returns the new (tradeable)
+ * variant — the used/broken forms are untradeable, so repair is how a worn
+ * piece becomes sellable again (the repair-flip market). Individual charges
+ * are invisible to inventory diffs, so unlike Barrows no wear can be accrued
+ * during combat — the repair fee itself is the expense.
  */
 public final class MoonWear
 {
@@ -56,9 +58,12 @@ public final class MoonWear
 
 	/**
 	 * An in-place state transition of the same piece: new -> used (first
-	 * combat use), used -> broken (0 charges), or broken -> used (repair).
-	 * A new-variant gain is never a transition product — the Lunar Chest is
-	 * the only source — so same-name loot of that piece always survives.
+	 * combat use), used -> broken (0 charges), used -> new or broken -> new
+	 * (repair — it returns the tradeable variant). Any two different ids of
+	 * one piece in a single diff can only be a mutation; a same-tick manual
+	 * swap is excluded upstream because Drop-intent losses are never paired.
+	 * A lone new-variant gain still survives as loot — pairing requires a
+	 * same-piece loss in the same diff, which a Lunar Chest drop never has.
 	 */
 	public static boolean isRepairOrDegradePair(int lostId, int gainedId)
 	{
@@ -66,7 +71,6 @@ public final class MoonWear
 		int gained = pack(gainedId);
 		return lost >= 0 && gained >= 0
 			&& (lost >> 2) == (gained >> 2)
-			&& (gained & 3) != NEW
 			&& lost != gained;
 	}
 
@@ -81,11 +85,12 @@ public final class MoonWear
 	}
 
 	/**
-	 * Whether the id is a used or broken variant — neither is purchasable,
-	 * so coins paid for one are a repair fee, not a purchase.
+	 * Whether the id belongs to a moon piece at all (new, used, or broken).
+	 * A repair's diff shape — coins lost, a moon id gained — is not a shop
+	 * purchase at any state, so purchase routing must skip moon variants.
 	 */
-	public static boolean isNonNewVariant(int id)
+	public static boolean isMoonVariant(int id)
 	{
-		return stateOf(id) > NEW;
+		return pack(id) >= 0;
 	}
 }

@@ -33,7 +33,20 @@ public class ChargeDegradationHandlerTest
 	public void setUp()
 	{
 		handler = new ChargeDegradationHandler();
-		lenient().when(itemManager.canonicalize(anyInt())).thenAnswer(inv -> inv.getArgument(0));
+		lenient().when(itemManager.canonicalize(anyInt())).thenAnswer(inv -> {
+			// ItemMapping canonicalizes moon used variants onto the new
+			// tradeable id (the broken variant is unmapped)
+			final int id = inv.getArgument(0);
+			switch (id)
+			{
+				case ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED:
+					return ItemID.BLOOD_MOON_CHESTPLATE;
+				case ItemID.ECLIPSE_MOON_HELM_DEGRADED:
+					return ItemID.ECLIPSE_MOON_HELM;
+				default:
+					return id;
+			}
+		});
 
 		stubItem(11978, "Amulet of glory(6)", 13500L);
 		stubItem(11976, "Amulet of glory(5)", 13000L);
@@ -772,14 +785,14 @@ public class ChargeDegradationHandlerTest
 	// ── Moons of Peril repairs ─────────────────────────────────────────
 
 	@Test
-	public void moonRepair_brokenToUsed_cancelsGainsAndLosses_leavesFee()
+	public void moonRepair_brokenToNew_cancelsGainsAndLosses_leavesFee()
 	{
 		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, "Blood moon chestplate (broken)", 0L);
-		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE, "Blood moon chestplate", 2791852L);
 		stubItem(ItemID.COINS, "Coins", 1L);
 
 		Map<Integer, Integer> rawGains = new HashMap<>();
-		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, 1); // repaired chestplate from the armour stand
+		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE, 1); // repaired piece returns tradeable-new
 
 		Map<Integer, Integer> rawLosses = new HashMap<>();
 		rawLosses.put(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, 1); // broken chestplate handed in
@@ -807,6 +820,45 @@ public class ChargeDegradationHandlerTest
 			java.util.Collections.singletonMap(ItemID.COINS, 757500), context.getRawLosses());
 		Assert.assertEquals("Moon wear is not accrued — no repair allowance",
 			0L, context.getBarrowsRepairAllowanceGp());
+	}
+
+	@Test
+	public void moonRepair_usedToNew_partialRepair_cancelsGainsAndLosses_leavesFee()
+	{
+		// The diff shape seen live: a barely-degraded used piece repaired for
+		// a small fee returns the new tradeable variant — {lost used+coins,
+		// gained new}, both named "Blood moon chestplate".
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, "Blood moon chestplate", 2791852L);
+		stubItem(ItemID.BLOOD_MOON_CHESTPLATE, "Blood moon chestplate", 2827567L);
+		stubItem(ItemID.COINS, "Coins", 1L);
+
+		Map<Integer, Integer> rawGains = new HashMap<>();
+		rawGains.put(ItemID.BLOOD_MOON_CHESTPLATE, 1); // repaired piece returns tradeable-new
+
+		Map<Integer, Integer> rawLosses = new HashMap<>();
+		rawLosses.put(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, 1); // used piece handed in
+		rawLosses.put(ItemID.COINS, 280);                       // proportional fee for ~1 missing charge
+
+		ReconciliationContext context = new ReconciliationContext(
+			rawGains,
+			rawLosses,
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			new HashMap<>(),
+			null,
+			null,
+			CoinFlowSession.createNew(),
+			itemManager,
+			config,
+			null
+		);
+
+		handler.reconcile(context);
+
+		Assert.assertTrue("Repaired chestplate must not count as profit", context.getRawGains().isEmpty());
+		Assert.assertEquals("Only the repair fee remains in losses for the cash handler",
+			java.util.Collections.singletonMap(ItemID.COINS, 280), context.getRawLosses());
 	}
 
 	@Test

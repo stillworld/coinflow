@@ -7,12 +7,17 @@ import org.junit.Test;
 public class MoonWearTest
 {
 	@Test
-	public void repair_brokenToUsed_isTransition()
+	public void repair_toNewVariant_isTransition()
 	{
+		// A repair returns the tradeable new variant — that is what makes the
+		// repair-flip market possible — so both used->new and broken->new
+		// must pair to cancel the item sides of a repair diff.
 		Assert.assertTrue(MoonWear.isRepairOrDegradePair(
-			ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED));
+			ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, ItemID.BLOOD_MOON_CHESTPLATE));
 		Assert.assertTrue(MoonWear.isRepairOrDegradePair(
-			ItemID.ECLIPSE_MOON_HELM_BROKEN, ItemID.ECLIPSE_MOON_HELM_DEGRADED));
+			ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, ItemID.BLOOD_MOON_CHESTPLATE));
+		Assert.assertTrue(MoonWear.isRepairOrDegradePair(
+			ItemID.ECLIPSE_MOON_HELM_BROKEN, ItemID.ECLIPSE_MOON_HELM));
 	}
 
 	@Test
@@ -25,14 +30,14 @@ public class MoonWearTest
 	}
 
 	@Test
-	public void newVariantGain_isNeverTransition()
+	public void loneNewVariantGain_stillLoot()
 	{
-		// A repaired piece returns in the used state; the new id only comes
-		// from the Lunar Chest, so it must stay loot.
+		// Pairing only fires on a same-piece loss + gain in one diff, so a
+		// Lunar Chest drop of the new variant is never suppressed.
 		Assert.assertFalse(MoonWear.isRepairOrDegradePair(
-			ItemID.BLOOD_MOON_CHESTPLATE_BROKEN, ItemID.BLOOD_MOON_CHESTPLATE));
+			ItemID.COINS, ItemID.BLOOD_MOON_CHESTPLATE));
 		Assert.assertFalse(MoonWear.isRepairOrDegradePair(
-			ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED, ItemID.BLOOD_MOON_CHESTPLATE));
+			ItemID.ECLIPSE_MOON_CHESTPLATE, ItemID.BLOOD_MOON_CHESTPLATE));
 	}
 
 	@Test
@@ -56,9 +61,10 @@ public class MoonWearTest
 		Assert.assertFalse(MoonWear.isUsedVariant(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN));
 		Assert.assertFalse(MoonWear.isUsedVariant(ItemID.COINS));
 
-		Assert.assertTrue(MoonWear.isNonNewVariant(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED));
-		Assert.assertTrue(MoonWear.isNonNewVariant(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN));
-		Assert.assertFalse(MoonWear.isNonNewVariant(ItemID.BLOOD_MOON_CHESTPLATE));
-		Assert.assertFalse(MoonWear.isNonNewVariant(ItemID.COINS));
+		Assert.assertTrue(MoonWear.isMoonVariant(ItemID.BLOOD_MOON_CHESTPLATE));
+		Assert.assertTrue(MoonWear.isMoonVariant(ItemID.BLOOD_MOON_CHESTPLATE_DEGRADED));
+		Assert.assertTrue(MoonWear.isMoonVariant(ItemID.BLOOD_MOON_CHESTPLATE_BROKEN));
+		Assert.assertFalse(MoonWear.isMoonVariant(ItemID.TORVA_LEGS));
+		Assert.assertFalse(MoonWear.isMoonVariant(ItemID.COINS));
 	}
 }

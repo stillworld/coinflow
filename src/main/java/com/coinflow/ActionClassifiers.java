@@ -164,11 +164,12 @@ final class ActionClassifiers
 			{
 				continue;
 			}
-			if (MoonWear.isNonNewVariant(gainedId))
+			if (MoonWear.isMoonVariant(gainedId))
 			{
-				// Moon used/broken variants can't be bought — coins paid for
-				// one are a repair fee, not a purchase. Keep checking: a real
-				// purchase may share the diff.
+				// Moon variants aren't purchasable mid-degradation — coins
+				// paid alongside one are a repair fee, not a purchase. The
+				// repair returns the tradeable new variant, so skip it too.
+				// Keep checking: a real purchase may share the diff.
 				continue;
 			}
 			hasNonCoinGain = true;

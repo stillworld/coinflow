@@ -116,7 +116,10 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 
 					if (isUsageStepPair(lostName, gainedName)
 						|| isLightSourcePair(canonicalLostId, canonicalGainedId, lostName, gainedName)
-						|| MoonWear.isRepairOrDegradePair(canonicalLostId, canonicalGainedId))
+						// Moon pairing needs the raw ids: ItemMapping canonicalizes the
+						// used variant onto the new id, so a used->new repair diff would
+						// otherwise compare identical ids and never pair.
+						|| MoonWear.isRepairOrDegradePair(lostId, gainedId))
 					{
 						gainedMatchId = gainedId;
 						break;
@@ -193,7 +196,7 @@ public class ChargeDegradationHandler implements ReconciliationHandler
 				int canonicalGainedId = itemManager != null ? itemManager.canonicalize(gainedId) : gainedId;
 				String gainedName = context.getItemName(canonicalGainedId);
 				if (isPartiallyDegraded(gainedName) || isLitLightSource(canonicalGainedId, gainedName)
-					|| isImbuedVariant(gainedName) || MoonWear.isUsedVariant(canonicalGainedId))
+					|| isImbuedVariant(gainedName) || MoonWear.isUsedVariant(gainedId))
 				{
 					rawGains.remove(gainedId);
 					log.debug("Suppressed partially degraded, lit, or imbued item from profit gains: {}", gainedName);
