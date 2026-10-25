@@ -111,15 +111,7 @@ final class CannonTracker
 		{
 			return;
 		}
-		boolean decayed = false;
-		try
-		{
-			decayed = plugin.client.getVarbitValue(VarbitID.MCANNON_DECAYED) == 1;
-		}
-		catch (IndexOutOfBoundsException e)
-		{
-			// Not varp-backed on this build — DROPCANNON alone still seeds.
-		}
+		boolean decayed = isDecayed();
 		boolean placed = plugin.client.getVarpValue(VarPlayerID.DROPCANNON) == DEPLOYED_SEED_IDS.length;
 		if (placed || decayed)
 		{
@@ -205,6 +197,7 @@ final class CannonTracker
 			}
 		}
 
+		boolean partReturned = false;
 		if (gains != null && !shopOpen)
 		{
 			Iterator<Map.Entry<Integer, Integer>> it = gains.entrySet().iterator();
@@ -219,6 +212,7 @@ final class CannonTracker
 					{
 						deployedParts.compute(id, (k, v) -> v - returned <= 0 ? null : v - returned);
 						entry.setValue(entry.getValue() - returned);
+						partReturned = true;
 						log.debug("Cannon part returned: {} x{}", id, returned);
 					}
 					if (entry.getValue() <= 0)
@@ -259,6 +253,66 @@ final class CannonTracker
 			loadedBalls.clear();
 			seededBalls = 0;
 		}
+		else if (partReturned && serverReportsUndeployed())
+		{
+			// Parts came home but a phantom entry kept the ledger deployed —
+			// a spare-part loss misread as a deploy, a stale varp re-mark,
+			// anything the diff pipeline can't see. The server says no
+			// cannon is down, so the residue can't be real; drop it rather
+			// than let future ball gains strip as "returns" and fabricate
+			// reversals.
+			log.debug("Cannon ledger healed: phantom deployed state cleared on pick-up");
+			deployedParts.clear();
+			loadedBalls.clear();
+			seededBalls = 0;
+		}
 		return reversals;
+	}
+
+	/**
+	 * True when the server varps say no cannon is down and none is decayed —
+	 * {@code DROPCANNON} reads literally 0 (a partially built kit reads 1-3,
+	 * so mid-setup states don't count as undeployed). Unknown without a client.
+	 */
+	private boolean serverReportsUndeployed()
+	{
+		if (plugin.client == null)
+		{
+			return false;
+		}
+		if (plugin.client.getVarpValue(VarPlayerID.DROPCANNON) != 0)
+		{
+			return false;
+		}
+		return !isDecayed();
+	}
+
+	private boolean isDecayed()
+	{
+		try
+		{
+			return plugin.client.getVarbitValue(VarbitID.MCANNON_DECAYED) == 1;
+		}
+		catch (IndexOutOfBoundsException e)
+		{
+			// Not varp-backed on this build.
+			return false;
+		}
+	}
+
+	/**
+	 * Baseline-time reconcile: seeds like {@link #syncDeployed}, but also
+	 * drops phantom state when the server says no cannon is down. Baselines
+	 * anchor at stable points (login/reset) with no diff in flight, so an
+	 * "undeployed" read can't be a mid-setup or pick-up race.
+	 */
+	void reconcileBaseline()
+	{
+		syncDeployed();
+		if (!deployedParts.isEmpty() && serverReportsUndeployed())
+		{
+			log.debug("Cannon ledger healed at baseline: server reports no cannon down");
+			reset();
+		}
 	}
 }
