@@ -4,12 +4,16 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.Notifier;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -148,6 +152,210 @@ public class CannonTrackerTest
 
 		Assert.assertFalse(plugin.cannonTracker.isDeployed());
 		Assert.assertEquals(180_000L, plugin.session.getTotalProfit());
+	}
+
+	// ── Server-varp seeding (cannon already down at login/reset) ────────
+
+	@Test
+	public void preDeployedCannon_pickupIsNotProfit()
+	{
+		// Cannon deployed before tracking began — no deploy diff was ever
+		// observed, so the ledger is seeded from the server varps.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		plugin.cannonTracker.syncDeployed();
+
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+
+		fireInv();
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1, ItemID.TWPART4, 1);
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertFalse(plugin.cannonTracker.isDeployed());
+	}
+
+	@Test
+	public void decayedCannon_reclaimIsNotProfit()
+	{
+		// A decayed cannon returns no parts on its own, but the Nulodion
+		// reclaim still has to net against the ledger.
+		when(client.getVarbitValue(VarbitID.MCANNON_DECAYED)).thenReturn(1);
+		plugin.cannonTracker.syncDeployed();
+
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+
+		fireInv();
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1, ItemID.TWPART4, 1);
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void varpSync_doesNotInflateObservedDeploy()
+	{
+		deployCannon();
+		fireInv(); // load the 100 balls into the deployed cannon
+
+		// Mid-session sync after a diff-observed deploy must not add a
+		// second phantom kit on top of the recorded one.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		plugin.cannonTracker.syncDeployed();
+
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.MCANNONBALL, 100);
+
+		Assert.assertFalse(plugin.cannonTracker.isDeployed());
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void partialSetupVarp_doesNotSeed()
+	{
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(2);
+		plugin.cannonTracker.syncDeployed();
+
+		Assert.assertFalse(plugin.cannonTracker.isDeployed());
+	}
+
+	@Test
+	public void dropcannonVarpEvent_seedsDeployed()
+	{
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+
+		VarbitChanged varp = new VarbitChanged();
+		varp.setVarpId(VarPlayerID.DROPCANNON);
+		varp.setVarbitId(-1);
+		varp.setValue(4);
+		plugin.onVarbitChanged(varp);
+
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+	}
+
+	// ── Varp-seeded ball contents (pre-session/pre-reset loads) ─────────
+
+	@Test
+	public void seededBalls_returnWithoutProfit()
+	{
+		// Cannon already loaded before tracking began: the returned balls
+		// strip against the seeded pool — neutral, not loot, no reversal.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		when(client.getVarpValue(VarPlayerID.ROCKTHROWER)).thenReturn(20);
+		plugin.cannonTracker.syncDeployed();
+
+		fireInv();
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.MCANNONBALL, 20);
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void seededBalls_stripAnyBallType()
+	{
+		// The varp carries no type info — the seeded pool strips any
+		// cannonball id, so a granite return is still neutral.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		when(client.getVarpValue(VarPlayerID.ROCKTHROWER)).thenReturn(10);
+		plugin.cannonTracker.syncDeployed();
+
+		fireInv();
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.GRANITE_CANNONBALL, 10);
+
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void sessionReset_seededBallsReturnNeutral()
+	{
+		// Reproduces the reported case: load 30, session reset, load 17,
+		// pick up — the pre-reset contents must not book as profit.
+		deployCannon();
+		fireInv(); // load the 100 balls
+		plugin.session = CoinFlowSession.createNew();
+		plugin.cannonTracker.reset(); // what resetSession does
+
+		// Baseline after the reset reseeds from varps: cannon still down,
+		// 25 balls still inside. The 17 balls carried into the new session
+		// land in the re-baseline, not a gain diff.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		when(client.getVarpValue(VarPlayerID.ROCKTHROWER)).thenReturn(25);
+		plugin.cannonTracker.syncDeployed();
+		plugin.previousInventorySnapshot = null;
+		plugin.snapshotInitialized = false;
+		fireInv(ItemID.MCANNONBALL, 17);
+
+		fireInv(); // reload the 17 into the cannon — a new-session expense
+		Assert.assertEquals(17L * 150L, plugin.session.getTotalExpenses());
+
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.MCANNONBALL, 25 + 17);
+
+		Assert.assertEquals("Pre-reset balls return neutral — not loot",
+			0L, plugin.session.getGrossProfit());
+		Assert.assertEquals("New-session load reversed on return",
+			0L, plugin.session.getTotalExpenses());
+		Assert.assertFalse(plugin.cannonTracker.isDeployed());
+	}
+
+	@Test
+	public void seededBalls_doNotInflateReversals()
+	{
+		deployCannon();
+		fireInv(); // load the 100 balls — booked in-session
+
+		// Varp reports the same 100 — nothing new seeds on top of the
+		// observed loads, so the return reverses exactly the expense.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
+		when(client.getVarpValue(VarPlayerID.ROCKTHROWER)).thenReturn(100);
+		plugin.cannonTracker.syncDeployed();
+
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.MCANNONBALL, 100);
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void decayedCannon_dropsBallLedger()
+	{
+		deployCannon();
+		fireInv(); // load the 100 balls — expense booked
+
+		// Decay destroys the cannon's contents: ball pools clear and a
+		// later ball gain is real loot, not a return.
+		when(client.getVarbitValue(VarbitID.MCANNON_DECAYED)).thenReturn(1);
+		plugin.cannonTracker.syncDeployed();
+
+		fireInv(ItemID.MCANNONBALL, 5);
+		Assert.assertEquals(5L * 150L, plugin.session.getGrossProfit());
+	}
+
+	// ── Rune-pouch deferral interplay ────────────────────────────────────
+
+	@Test
+	public void pickupWithRunePouch_stillReversesBallExpense()
+	{
+		// Regression: with a pouch carried, a fully-netted pickup diff hit
+		// the deferred-rune early return and silently dropped the ball
+		// reversals — the load expense stayed booked forever.
+		fireInv(ItemID.BH_RUNE_POUCH, 1, ItemID.TWPART1, 1, ItemID.TWPART2, 1,
+			ItemID.TWPART3, 1, ItemID.TWPART4, 1, ItemID.MCANNONBALL, 100);
+		fireInv(ItemID.BH_RUNE_POUCH, 1, ItemID.MCANNONBALL, 100); // deploy
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+
+		fireInv(ItemID.BH_RUNE_POUCH, 1); // load the 100 balls
+		Assert.assertEquals(100L * 150L, plugin.session.getTotalExpenses());
+
+		fireInv(ItemID.BH_RUNE_POUCH, 1, ItemID.TWPART1, 1, ItemID.TWPART2, 1,
+			ItemID.TWPART3, 1, ItemID.TWPART4, 1, ItemID.MCANNONBALL, 60);
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals("Returned balls reverse the load expense",
+			40L * 150L, plugin.session.getTotalExpenses());
 	}
 
 	// ── Cannonballs ──────────────────────────────────────────────────────

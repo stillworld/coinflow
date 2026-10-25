@@ -21,6 +21,7 @@ import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.util.QuantityFormatter;
 
@@ -742,6 +743,13 @@ final class InventoryDiffProcessor
 				deferredRuneLosses = deferPouchRuneDiffs(rawGains, rawLosses);
 				if (rawGains.isEmpty() && rawLosses.isEmpty())
 				{
+					// A cannon pick-up that netted to zero still carries
+					// ball-return expense reversals — don't drop them with
+					// the deferred-rune early out.
+					if (!cannonReversals.isEmpty())
+					{
+						plugin.session = plugin.session.withExpenseReversal(cannonReversals);
+					}
 					plugin.previousInventorySnapshot = currentSnapshot;
 					return;
 				}
@@ -1045,6 +1053,16 @@ final class InventoryDiffProcessor
 		}
 
 		int varbitId = event.getVarbitId();
+
+		// Server cannon state: DROPCANNON counts placed parts (4 = fully
+		// set up) and MCANNON_DECAYED flags a reclaimable kit. Resync the
+		// deployed ledger so a cannon the diff pipeline never saw leave
+		// the inventory — already down at login/reset, or a swallowed
+		// deploy diff — can't book its pick-up or reclaim as profit.
+		if (event.getVarpId() == VarPlayerID.DROPCANNON || varbitId == VarbitID.MCANNON_DECAYED)
+		{
+			plugin.cannonTracker.syncDeployed();
+		}
 
 		// The boat hold joins/leaves the merged snapshot with the spawned
 		// state — absorb the transition so spawn/despawn never books the
