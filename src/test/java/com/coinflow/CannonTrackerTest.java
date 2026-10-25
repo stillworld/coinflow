@@ -89,6 +89,10 @@ public class CannonTrackerTest
 		stubTrackableItem(ItemID.TWPART4, "Cannon furnace", 200_000L);
 		stubTrackableItem(ItemID.MCANNONBALL, "Steel cannonball", 150L);
 		stubTrackableItem(ItemID.GRANITE_CANNONBALL, "Granite cannonball", 500L);
+
+		// Server varps agree the cannon is down in these tests — deploys
+		// observed via diffs would otherwise heal as phantom state.
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(4);
 	}
 
 	// ── Setup / teardown netting ─────────────────────────────────────────
@@ -213,6 +217,56 @@ public class CannonTrackerTest
 	{
 		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(2);
 		plugin.cannonTracker.syncDeployed();
+
+		Assert.assertFalse(plugin.cannonTracker.isDeployed());
+	}
+
+	// ── Phantom ledger healing ────────────────────────────────────────────
+
+	// A spare base carried into the deploy and later lost while the cannon
+	// is down merges as a second deploy — {TWPART1:2} survives the
+	// single-part return and would stick the ledger "deployed" forever.
+	private void deployWithSparePartPhantom()
+	{
+		fireInv(ItemID.TWPART1, 2, ItemID.TWPART2, 1, ItemID.TWPART3, 1,
+			ItemID.TWPART4, 1, ItemID.MCANNONBALL, 100);
+		fireInv(ItemID.TWPART1, 1, ItemID.MCANNONBALL, 100); // kit consumed, spare stays
+		fireInv(ItemID.MCANNONBALL, 100); // spare base leaves (noted/sold) — misread as deploy
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+	}
+
+	@Test
+	public void phantomDeployEntry_healsOnPickup()
+	{
+		deployWithSparePartPhantom();
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(0);
+
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1, ItemID.TWPART4, 1);
+
+		Assert.assertFalse("Phantom deploy state cleared on pick-up",
+			plugin.cannonTracker.isDeployed());
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+	}
+
+	@Test
+	public void phantomDeployEntry_noHealWhileServerDeployed()
+	{
+		// Same phantom, but the server still reports the cannon down —
+		// nothing is cleared (the residue may be real state).
+		deployWithSparePartPhantom();
+
+		fireInv(ItemID.TWPART1, 1, ItemID.TWPART2, 1, ItemID.TWPART3, 1, ItemID.TWPART4, 1);
+
+		Assert.assertTrue(plugin.cannonTracker.isDeployed());
+	}
+
+	@Test
+	public void phantomDeployEntry_healsAtBaseline()
+	{
+		deployWithSparePartPhantom();
+		when(client.getVarpValue(VarPlayerID.DROPCANNON)).thenReturn(0);
+
+		plugin.cannonTracker.reconcileBaseline();
 
 		Assert.assertFalse(plugin.cannonTracker.isDeployed());
 	}

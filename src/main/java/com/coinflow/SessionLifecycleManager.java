@@ -231,8 +231,8 @@ final class SessionLifecycleManager
 
 		// A cannon already deployed when the baseline anchors never produced a
 		// deploy diff — seed the ledger from the server varps or its pick-up
-		// books as profit.
-		plugin.cannonTracker.syncDeployed();
+		// books as profit; a phantom ledger heals here too.
+		plugin.cannonTracker.reconcileBaseline();
 
 		ItemContainer invContainer = plugin.client.getItemContainer(InventoryID.INV);
 		if (invContainer != null)

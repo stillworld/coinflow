@@ -1059,7 +1059,11 @@ final class InventoryDiffProcessor
 		// deployed ledger so a cannon the diff pipeline never saw leave
 		// the inventory — already down at login/reset, or a swallowed
 		// deploy diff — can't book its pick-up or reclaim as profit.
-		if (event.getVarpId() == VarPlayerID.DROPCANNON || varbitId == VarbitID.MCANNON_DECAYED)
+		// Pure varp events only (varbitId == -1): a varbit packed into the
+		// same varp would report varpId 2 too, and its changes could
+		// spuriously re-mark the ledger.
+		if ((varbitId == -1 && event.getVarpId() == VarPlayerID.DROPCANNON)
+			|| varbitId == VarbitID.MCANNON_DECAYED)
 		{
 			plugin.cannonTracker.syncDeployed();
 		}
