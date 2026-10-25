@@ -229,6 +229,11 @@ final class SessionLifecycleManager
 			return;
 		}
 
+		// A cannon already deployed when the baseline anchors never produced a
+		// deploy diff — seed the ledger from the server varps or its pick-up
+		// books as profit.
+		plugin.cannonTracker.syncDeployed();
+
 		ItemContainer invContainer = plugin.client.getItemContainer(InventoryID.INV);
 		if (invContainer != null)
 		{
@@ -337,10 +342,11 @@ final class SessionLifecycleManager
 		plugin.recentDropIntents.clear();
 		plugin.recentOpenIntents.clear();
 		// The deployed-cannon ledger survives logout (a deployed cannon does
-		// too — reclaimable from Nulodion), but the loaded-balls estimate does
-		// not: ball state on relog is unknown, so fewer reversals are safer
-		// than phantom ones.
-		plugin.cannonTracker.clearLoadedBalls();
+		// too — reclaimable from Nulodion) — including the loaded-balls
+		// mirror, which matches the session's booked load expense. Only the
+		// varp-seeded strip pool drops: it re-derives from ROCKTHROWER on
+		// relog anyway.
+		plugin.cannonTracker.clearSeededBalls();
 		// Held coffer coins and dispenser-rescue entries never survive a
 		// boundary — a held loss expiring after relog would book as spend.
 		plugin.blastFurnaceTracker.clearTransient();
