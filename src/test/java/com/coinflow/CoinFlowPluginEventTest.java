@@ -812,7 +812,7 @@ public class CoinFlowPluginEventTest
 		// so the close settles with an empty diff.
 		when(client.getTickCount()).thenReturn(200);
 		plugin.onChatMessage(new ChatMessage(null, net.runelite.api.ChatMessageType.GAMEMESSAGE,
-			"", "Death charges you 8,915 coins.", "", 0));
+			"", "Death charges you 8,915 x Coins.", "", 0));
 		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.DEATH_OFFICE, 0, false));
 		plugin.onGameTick(new GameTick());
 
@@ -859,6 +859,77 @@ public class CoinFlowPluginEventTest
 
 		Assert.assertEquals("late reclaim reversed the Death row", 0L, plugin.session.getTotalExpenses());
 		Assert.assertEquals("late gain was not counted as loot", 0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0, plugin.deathTracker.ledgerQuantity(whipId));
+	}
+
+	@Test
+	public void deathChargeMessage_allowsDelayedReclaimWithoutCreditingGain()
+	{
+		int whipId = 4151;
+		stubTrackableItem(whipId, "Abyssal whip", 1_500_000L);
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getTickCount()).thenReturn(0);
+
+		ItemContainer fullInv = mockContainer(InventoryID.INV, whipId, 1);
+		ItemContainer emptyWorn = mockContainer(InventoryID.WORN);
+		stubLiveContainers(fullInv, emptyWorn);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, fullInv));
+		dieAndSettle(100, 103, 106, mockContainer(InventoryID.INV), emptyWorn);
+
+		WidgetLoaded open = new WidgetLoaded();
+		open.setGroupId(InterfaceID.DEATH_OFFICE);
+		plugin.onWidgetLoaded(open);
+		plugin.onWidgetClosed(new WidgetClosed(InterfaceID.DEATH_OFFICE, 0, false));
+		when(client.getTickCount()).thenReturn(200);
+		plugin.onGameTick(new GameTick());
+
+		when(client.getTickCount()).thenReturn(250);
+		plugin.onChatMessage(new ChatMessage(null, net.runelite.api.ChatMessageType.GAMEMESSAGE,
+			"", "Death charges you 8,000 x Coins.", "", 0));
+		ItemContainer reclaimedInv = mockContainer(InventoryID.INV, whipId, 1);
+		stubLiveContainers(reclaimedInv, emptyWorn);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, reclaimedInv));
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0, plugin.deathTracker.ledgerQuantity(whipId));
+
+		when(client.getTickCount()).thenReturn(252);
+		plugin.onGameTick(new GameTick());
+		Assert.assertEquals(8_000L, plugin.session.getTotalExpenses());
+	}
+
+	@Test
+	public void deathRecoveryDuringRebaselineProcessing_isMatchedOnlyOnce()
+	{
+		int whipId = 4151;
+		int pot4Id = 12625;
+		int pot3Id = 12627;
+		stubTrackableItem(whipId, "Abyssal whip", 1_500_000L);
+		stubTrackableItem(pot4Id, "Stamina potion(4)", 6_000L);
+		stubTrackableItem(pot3Id, "Stamina potion(3)", 4_500L);
+		plugin.deathTracker.recordLost(Collections.singletonMap(whipId, 1),
+			Collections.singletonMap(whipId, 1_500_000L));
+		plugin.deathTracker.setRetrievalBaseline(Collections.emptyMap(), InterfaceID.DEATH_OFFICE);
+		plugin.deathTracker.settleRetrieval(Collections.emptyMap(), 200, false);
+		plugin.session = CoinFlowSession.createNew().withExpenses(Collections.singletonMap(
+			DeathTracker.DEATH_ROW_ID,
+			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME,
+				1_500_000L, 1L)));
+
+		plugin.previousInventorySnapshot = snapshot(pot4Id, 1);
+		plugin.snapshotInitialized = true;
+		plugin.setNeedsRebaseline(true);
+		plugin.rebaselineGraceTicks = 2;
+		when(client.getTickCount()).thenReturn(205);
+		ItemContainer emptyWorn = mockContainer(InventoryID.WORN);
+		ItemContainer recoveredAndSipped = mockContainer(InventoryID.INV, pot3Id, 1, whipId, 1);
+		stubLiveContainers(recoveredAndSipped, emptyWorn);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, recoveredAndSipped));
+
+		Assert.assertEquals(0L, plugin.session.getGrossProfit());
+		Assert.assertEquals(1_500L, plugin.session.getTotalExpenses());
 		Assert.assertEquals(0, plugin.deathTracker.ledgerQuantity(whipId));
 	}
 

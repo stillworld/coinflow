@@ -431,17 +431,6 @@ final class InventoryDiffProcessor
 				// inside a re-baseline window, where one arriving must not
 				// promote baseline noise into a processed diff or a purchase.
 				stripNonEconomicItems(rawGains, rawLosses);
-				// A death-drop pickup inside a re-baseline window is still a
-				// recovery — reverse the Death charge before the gain is
-				// swallowed by the baseline.
-				// KNOWN ISSUE (fix later): if isProcessing flips true below, the
-				// normal path re-diffs the snapshots at ~line 472 and the
-				// already-consumed recovery items are booked as fresh gains on
-				// top of the Death-row reversal (~2x phantom profit). In practice
-				// this is unlikely: a re-baselined reclaim arriving in the same
-				// diff as a dose sip/portion/noting/processing change requires
-				// e.g. sipping a potion in the exact tick reclaimed items land.
-				plugin.matchDeathPickupGains(rawGains);
 				if (!rawLosses.isEmpty() && !rawGains.isEmpty())
 				{
 					for (Map.Entry<Integer, Integer> lostEntry : rawLosses.entrySet())
@@ -483,6 +472,11 @@ final class InventoryDiffProcessor
 
 			if (!isProcessing)
 			{
+				// A death-drop pickup inside a re-baseline window is still a
+				// recovery — reverse the Death charge before the gain is
+				// swallowed by the baseline.
+				plugin.matchDeathPickupGains(rawGains);
+
 				// Cannon setup/pick-up inside a re-baseline window still has to
 				// net against deployed parts/loaded balls or the tracker stays
 				// deployed forever; returned balls reverse the earlier load

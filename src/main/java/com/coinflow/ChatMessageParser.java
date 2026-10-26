@@ -29,7 +29,8 @@ final class ChatMessageParser
 	// "Death charges you 8,915 coins." — the authoritative reclaim-fee signal;
 	// bank/coffer payments and reclaim-to-bank items are invisible to diffs.
 	static final Pattern DEATH_FEE_MESSAGE = Pattern.compile(
-		"Death charges you ([\\d,]+) coins"
+		"Death charges you ([\\d,]+)(?:\\s*x)?\\s+coins\\b",
+		Pattern.CASE_INSENSITIVE
 	);
 	// "You successfully retrieved everything from your gravestone." — a
 	// direct gravestone claim opens no retrieval interface and fires no
