@@ -165,6 +165,43 @@ public class ActivityTimelineTest
 	}
 
 	@Test
+	public void recordCorrection_reconcilesTotalsWithoutChangingLiveActivity()
+	{
+		ActivityTimeline t = new ActivityTimeline();
+		for (int i = 0; i < 21; i++)
+		{
+			tick(t, VORKATH, 1000, 200);
+		}
+
+		t.recordCorrection(-600, -50);
+		t.rebase(400, 150);
+		tick(t, VORKATH, 400, 150);
+
+		long grossSum = 0;
+		long expenseSum = 0;
+		ActivityTimeline.Segment correction = null;
+		for (ActivityTimeline.Segment segment : t.getSegments())
+		{
+			grossSum += segment.gross;
+			expenseSum += segment.expenses;
+			if (segment.kind == ActivityTimeline.Kind.CORRECTION)
+			{
+				correction = segment;
+			}
+		}
+
+		Assert.assertEquals(400L, grossSum);
+		Assert.assertEquals(150L, expenseSum);
+		Assert.assertNotNull(correction);
+		Assert.assertEquals(-600L, correction.gross);
+		Assert.assertEquals(-50L, correction.expenses);
+		Assert.assertEquals(Duration.ZERO, correction.totalTime);
+		Assert.assertEquals(VORKATH.label, t.getCurrentSegment().label);
+		Assert.assertTrue(t.getCurrentSegment().live);
+		Assert.assertEquals(1000L, t.getCurrentSegment().gross);
+	}
+
+	@Test
 	public void segmentTotals_matchSessionTotals()
 	{
 		ActivityTimeline t = new ActivityTimeline();

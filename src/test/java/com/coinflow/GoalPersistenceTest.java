@@ -1,12 +1,14 @@
 package com.coinflow;
 
 import java.util.Collections;
+import java.util.concurrent.atomic.AtomicReference;
 import net.runelite.client.config.ConfigManager;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,6 +49,21 @@ public class GoalPersistenceTest
 	{
 		return CoinFlowSession.createNew().withGains(
 			Collections.singletonMap(555, new CoinFlowSession.TrackedItem(555, "Iron ore", 1, gp)));
+	}
+
+	private void useInMemoryConfigStorage()
+	{
+		AtomicReference<String> storedValue = new AtomicReference<>();
+		when(configManager.getConfiguration(CoinFlowConfig.CONFIG_GROUP, KEY))
+			.thenAnswer(invocation -> storedValue.get());
+		doAnswer(invocation -> {
+			storedValue.set(invocation.getArgument(2));
+			return null;
+		}).when(configManager).setConfiguration(eq(CoinFlowConfig.CONFIG_GROUP), eq(KEY), anyString());
+		doAnswer(invocation -> {
+			storedValue.set(null);
+			return null;
+		}).when(configManager).unsetConfiguration(CoinFlowConfig.CONFIG_GROUP, KEY);
 	}
 
 	@Test
@@ -137,6 +154,35 @@ public class GoalPersistenceTest
 		when(configManager.getConfiguration(CoinFlowConfig.CONFIG_GROUP, KEY)).thenReturn("10000|4000|0");
 		plugin.session = sessionWithProfit(3000);
 		Assert.assertEquals(7000L, plugin.goalTracker.effectiveTotal());
+	}
+
+	@Test
+	public void goalProgress_doesNotDoubleCountCheckpointAfterChangingGoalAmount()
+	{
+		useInMemoryConfigStorage();
+		when(config.goalAmount()).thenReturn("450000");
+		plugin.session = sessionWithProfit(240000)
+			.withDurations(java.time.Duration.ofSeconds(60), java.time.Duration.ofSeconds(90));
+		plugin.goalTracker.persistSession();
+
+		when(config.goalAmount()).thenReturn("1000000");
+		plugin.goalTracker.onGoalAmountChanged();
+		Assert.assertEquals(240000L, plugin.goalDisplayTotal());
+		Assert.assertEquals(60L, plugin.goalDisplaySeconds());
+
+		plugin.goalTracker.persistSession();
+		Assert.assertEquals(240000L, plugin.goalDisplayTotal());
+		Assert.assertEquals(60L, plugin.goalDisplaySeconds());
+
+		plugin.session = plugin.session.withGains(
+			Collections.singletonMap(556, new CoinFlowSession.TrackedItem(556, "Coal", 1, 30000)))
+			.withDurations(java.time.Duration.ofSeconds(70), java.time.Duration.ofSeconds(100));
+		Assert.assertEquals(270000L, plugin.goalDisplayTotal());
+		Assert.assertEquals(70L, plugin.goalDisplaySeconds());
+
+		plugin.goalTracker.persistSession();
+		Assert.assertEquals(270000L, plugin.goalDisplayTotal());
+		Assert.assertEquals(70L, plugin.goalDisplaySeconds());
 	}
 
 	@Test

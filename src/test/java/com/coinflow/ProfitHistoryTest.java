@@ -57,6 +57,20 @@ public class ProfitHistoryTest
 	}
 
 	@Test
+	public void correction_recordsImmediateAdjustedEndpoint()
+	{
+		ProfitHistory history = new ProfitHistory();
+		history.onTick(10_000);
+		ProfitHistory.Snapshot before = history.snapshot();
+
+		history.recordCorrection(4_000);
+
+		ProfitHistory.Snapshot after = history.snapshot();
+		Assert.assertTrue(after.revision > before.revision);
+		Assert.assertArrayEquals(new long[]{10_000, 4_000}, after.values);
+	}
+
+	@Test
 	public void minMax_trackNegativesAndRevisionBumps()
 	{
 		ProfitHistory history = new ProfitHistory();

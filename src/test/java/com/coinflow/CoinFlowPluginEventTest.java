@@ -9183,9 +9183,10 @@ public class CoinFlowPluginEventTest
 	}
 
 	@Test
-	public void removeSessionItem_rebasesTimeline()
+	public void removeSessionItem_reconcilesTimelineAndProfitHistory()
 	{
 		plugin.session = CoinFlowSession.createNew().withGains(gains(1, "Shark", 10, 1_000L));
+		plugin.profitHistory.onTick(plugin.session.getTotalProfit());
 		// Confirm the combat segment (21 ticks) with the session total carried.
 		for (int i = 0; i < 21; i++)
 		{
@@ -9202,6 +9203,15 @@ public class CoinFlowPluginEventTest
 			ActivityTimeline.ActivityClass.combat("Vorkath"), TICK, TICK,
 			plugin.session.getGrossProfit(), plugin.session.getTotalExpenses());
 		Assert.assertEquals(10_000L, plugin.activityTimeline.getCurrentSegment().gross);
+		long timelineGross = 0;
+		for (ActivityTimeline.Segment segment : plugin.activityTimeline.getSegments())
+		{
+			timelineGross += segment.gross;
+		}
+		Assert.assertEquals(plugin.session.getGrossProfit(), timelineGross);
+		Assert.assertEquals(ActivityTimeline.Kind.CORRECTION,
+			plugin.activityTimeline.getSegments().get(plugin.activityTimeline.getSegments().size() - 1).kind);
+		Assert.assertArrayEquals(new long[]{10_000, 0}, plugin.profitHistory.snapshot().values);
 	}
 
 	@Test

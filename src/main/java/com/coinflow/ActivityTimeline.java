@@ -28,7 +28,7 @@ final class ActivityTimeline
 {
 	enum Kind
 	{
-		COMBAT, SKILLING, BLAST_FURNACE, BANKING, AFK, TELEPORT, OTHER
+		COMBAT, SKILLING, BLAST_FURNACE, BANKING, AFK, TELEPORT, OTHER, CORRECTION
 	}
 
 	/** Classifier output: which activity, plus a display label (NPC or skill name). */
@@ -38,6 +38,7 @@ final class ActivityTimeline
 		static final ActivityClass BLAST_FURNACE = new ActivityClass(Kind.BLAST_FURNACE, "Blast Furnace");
 		static final ActivityClass AFK = new ActivityClass(Kind.AFK, "AFK");
 		static final ActivityClass TELEPORT = new ActivityClass(Kind.TELEPORT, "Teleport");
+		static final ActivityClass CORRECTION = new ActivityClass(Kind.CORRECTION, "Session adjustment");
 
 		final Kind kind;
 		final String label;
@@ -87,9 +88,10 @@ final class ActivityTimeline
 		final long gross;
 		final long expenses;
 		final int kills;
+		final boolean live;
 
 		private Segment(Kind kind, String label, Duration startOffset, Duration activeTime,
-			Duration totalTime, long gross, long expenses, int kills)
+			Duration totalTime, long gross, long expenses, int kills, boolean live)
 		{
 			this.kind = kind;
 			this.label = label;
@@ -99,6 +101,7 @@ final class ActivityTimeline
 			this.gross = gross;
 			this.expenses = expenses;
 			this.kills = kills;
+			this.live = live;
 		}
 
 		long net()
@@ -198,9 +201,10 @@ final class ActivityTimeline
 			kills += other.kills;
 		}
 
-		Segment snapshot()
+		Segment snapshot(boolean live)
 		{
-			return new Segment(cls.kind, cls.label, startOffset, activeTime, totalTime, gross, expenses, kills);
+			return new Segment(cls.kind, cls.label, startOffset, activeTime, totalTime,
+				gross, expenses, kills, live);
 		}
 	}
 
@@ -216,6 +220,7 @@ final class ActivityTimeline
 	private static final ActivityClass BOOTSTRAP = new ActivityClass(Kind.OTHER, "Other");
 
 	private final List<Builder> closed = new ArrayList<>();
+	private final List<Builder> corrections = new ArrayList<>();
 	private Builder current;
 	private Builder pending;
 	private long lastGross;
@@ -367,9 +372,27 @@ final class ActivityTimeline
 		lastExpenses = expenses;
 	}
 
+	void recordCorrection(long grossDelta, long expenseDelta)
+	{
+		if (grossDelta == 0 && expenseDelta == 0)
+		{
+			return;
+		}
+		Builder correction = new Builder(ActivityClass.CORRECTION);
+		correction.startOffset = current != null
+			? current.startOffset.plus(current.totalTime)
+			: Duration.ZERO;
+		correction.gross = grossDelta;
+		correction.expenses = expenseDelta;
+		corrections.add(correction);
+		revision++;
+		publish();
+	}
+
 	void reset()
 	{
 		closed.clear();
+		corrections.clear();
 		current = null;
 		pending = null;
 		lastGross = 0;
@@ -380,14 +403,18 @@ final class ActivityTimeline
 
 	private void publish()
 	{
-		List<Segment> out = new ArrayList<>(closed.size() + 1);
+		List<Segment> out = new ArrayList<>(closed.size() + corrections.size() + 1);
 		for (Builder b : closed)
 		{
-			out.add(b.snapshot());
+			out.add(b.snapshot(false));
 		}
 		if (current != null)
 		{
-			out.add(current.snapshot());
+			out.add(current.snapshot(true));
+		}
+		for (Builder correction : corrections)
+		{
+			out.add(correction.snapshot(false));
 		}
 		published = Collections.unmodifiableList(out);
 	}
@@ -400,7 +427,14 @@ final class ActivityTimeline
 	Segment getCurrentSegment()
 	{
 		List<Segment> segs = published;
-		return segs.isEmpty() ? null : segs.get(segs.size() - 1);
+		for (int i = segs.size() - 1; i >= 0; i--)
+		{
+			if (segs.get(i).live)
+			{
+				return segs.get(i);
+			}
+		}
+		return null;
 	}
 
 	/**

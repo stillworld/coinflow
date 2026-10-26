@@ -3,6 +3,7 @@ package com.coinflow;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +20,8 @@ import net.runelite.client.util.QuantityFormatter;
 final class SessionApplier
 {
 	private final CoinFlowPlugin plugin;
+	private long lastLoggedGoalAmount = -1L;
+	private String lastLoggedGoalProgress;
 
 	SessionApplier(CoinFlowPlugin plugin)
 	{
@@ -254,7 +257,15 @@ final class SessionApplier
 		if (goalAmount <= 0)
 		{
 			plugin.goalCompletedNotified = false;
+			lastLoggedGoalAmount = -1L;
+			lastLoggedGoalProgress = null;
 			return;
+		}
+
+		long goalTotal = plugin.goalDisplayTotal();
+		if (log.isDebugEnabled())
+		{
+			logGoalProgress(goalAmount, goalTotal);
 		}
 
 		if (plugin.goalTracker.isComplete())
@@ -264,7 +275,7 @@ final class SessionApplier
 			return;
 		}
 
-		if (plugin.session != null && plugin.goalDisplayTotal() >= goalAmount)
+		if (plugin.session != null && goalTotal >= goalAmount)
 		{
 			if (!plugin.goalCompletedNotified)
 			{
@@ -277,6 +288,19 @@ final class SessionApplier
 					plugin.notifier.notify("Coin Flow: Goal reached for " + goalTitle + " (" + QuantityFormatter.quantityToStackSize(goalAmount) + " gp)!");
 				}
 			}
+		}
+	}
+
+	private void logGoalProgress(long goalAmount, long goalTotal)
+	{
+		String displayedProgress = String.format(Locale.ROOT, "%.1f%%",
+			plugin.session != null ? plugin.session.getGoalProgress(goalAmount, goalTotal) * 100 : 0.0);
+		if (goalAmount != lastLoggedGoalAmount || !displayedProgress.equals(lastLoggedGoalProgress))
+		{
+			log.debug("Goal progress displayed: {} ({} / {} gp)",
+				displayedProgress, Math.max(0L, goalTotal), goalAmount);
+			lastLoggedGoalAmount = goalAmount;
+			lastLoggedGoalProgress = displayedProgress;
 		}
 	}
 }

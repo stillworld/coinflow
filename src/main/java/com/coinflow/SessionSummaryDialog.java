@@ -437,9 +437,16 @@ public class SessionSummaryDialog extends JDialog
 			row.add(left);
 
 			StringBuilder right = new StringBuilder();
-			right.append(formatDurationWords(agg.totalTime)).append(" (").append(sharePct).append("%) · ");
-			right.append(QuantityFormatter.quantityToStackSize(agg.gpPerHour(includeAfk))).append(" gp/hr · ");
 			long net = agg.net();
+			if (agg.kind == ActivityTimeline.Kind.CORRECTION)
+			{
+				right.append("Adjustment · ");
+			}
+			else
+			{
+				right.append(formatDurationWords(agg.totalTime)).append(" (").append(sharePct).append("%) · ");
+				right.append(QuantityFormatter.quantityToStackSize(agg.gpPerHour(includeAfk))).append(" gp/hr · ");
+			}
 			right.append(net < 0 ? "-" : "+").append(QuantityFormatter.quantityToStackSize(Math.abs(net))).append(" gp");
 			if (agg.kind == ActivityTimeline.Kind.COMBAT && agg.kills > 0)
 			{
@@ -497,13 +504,18 @@ public class SessionSummaryDialog extends JDialog
 		{
 			insightText = "100% pure profit! Zero supplies consumed during this session.";
 		}
-		else if (aggregates != null && aggregates.size() >= 2)
+		else if (aggregates != null && aggregates.stream()
+			.filter(agg -> agg.kind != ActivityTimeline.Kind.CORRECTION).count() >= 2)
 		{
 			long totalMillis = Math.max(1, totalTime.toMillis());
 			ActivityTimeline.Aggregate banking = null;
 			ActivityTimeline.Aggregate best = null;
 			for (ActivityTimeline.Aggregate agg : aggregates)
 			{
+				if (agg.kind == ActivityTimeline.Kind.CORRECTION)
+				{
+					continue;
+				}
 				if (agg.kind == ActivityTimeline.Kind.BANKING)
 				{
 					banking = agg;

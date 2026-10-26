@@ -76,6 +76,17 @@ final class ProfitHistory
 			return;
 		}
 		ticksSinceSample = 0;
+		record(cumulativeProfit);
+	}
+
+	void recordCorrection(long cumulativeProfit)
+	{
+		ticksSinceSample = 0;
+		record(cumulativeProfit);
+	}
+
+	private void record(long cumulativeProfit)
+	{
 		if (count == CAPACITY)
 		{
 			downsample();
