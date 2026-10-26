@@ -115,6 +115,16 @@ final class GoalTracker
 		return session.getTime(includeAfk).getSeconds();
 	}
 
+	private long unpersistedSessionContribution()
+	{
+		return sessionContribution() - persistedFromSession;
+	}
+
+	private long unpersistedSessionTrackedSeconds()
+	{
+		return sessionTrackedSeconds() - persistedSecondsFromSession;
+	}
+
 	/**
 	 * Reads and parses the persisted goal for the current account. Cached by
 	 * raw value so the string is only split when the stored data changes.
@@ -216,7 +226,8 @@ final class GoalTracker
 	/**
 	 * The figure goal UI and notification evaluate: the target itself when
 	 * complete (frozen "Goal Reached!" display), otherwise persisted progress
-	 * plus the live session's contribution. Unclamped — callers clamp at 0.
+	 * plus the live session's not-yet-persisted contribution. Unclamped —
+	 * callers clamp at 0.
 	 */
 	long effectiveTotal()
 	{
@@ -229,13 +240,13 @@ final class GoalTracker
 		{
 			return goal;
 		}
-		return persistedGp() + sessionContribution();
+		return persistedGp() + unpersistedSessionContribution();
 	}
 
 	/**
 	 * Seconds tracked toward the goal across the boundary — persisted time
-	 * from earlier sessions plus the live session's tracked time. Feeds the
-	 * blended cross-session ETA.
+	 * from earlier sessions plus the live session's not-yet-persisted time.
+	 * Feeds the blended cross-session ETA.
 	 */
 	long effectiveSeconds()
 	{
@@ -243,7 +254,7 @@ final class GoalTracker
 		{
 			return 0L;
 		}
-		return persistedSeconds() + sessionTrackedSeconds();
+		return persistedSeconds() + unpersistedSessionTrackedSeconds();
 	}
 
 	/**

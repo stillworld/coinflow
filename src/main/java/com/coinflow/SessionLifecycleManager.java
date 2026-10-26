@@ -445,8 +445,9 @@ final class SessionLifecycleManager
 		{
 			return;
 		}
-		plugin.session = plugin.session.withoutItem(itemId);
-		afterSessionItemRemoval(itemId);
+		CoinFlowSession previousSession = plugin.session;
+		plugin.session = previousSession.withoutItem(itemId);
+		afterSessionItemRemoval(itemId, previousSession, "Ignore item");
 	}
 
 	private void removeSessionItemOnClientThread(int itemId, boolean isExpense)
@@ -455,8 +456,9 @@ final class SessionLifecycleManager
 		{
 			return;
 		}
-		plugin.session = plugin.session.withoutItem(itemId, isExpense);
-		afterSessionItemRemoval(itemId);
+		CoinFlowSession previousSession = plugin.session;
+		plugin.session = previousSession.withoutItem(itemId, isExpense);
+		afterSessionItemRemoval(itemId, previousSession, isExpense ? "Remove expense" : "Remove gain");
 	}
 
 	/**
@@ -467,11 +469,39 @@ final class SessionLifecycleManager
 	 * goal notification if the removal dropped profit below the target, and
 	 * refresh the panel.
 	 */
-	private void afterSessionItemRemoval(int itemId)
+	private void afterSessionItemRemoval(int itemId, CoinFlowSession previousSession, String action)
 	{
 		plugin.recentlyDroppedItems.remove(itemId);
 		plugin.recentlyDroppedOwnedItems.remove(itemId);
 		plugin.recentlyExpensedDrops.remove(itemId);
+
+		CoinFlowSession.TrackedItem removedGain = previousSession.getTrackedItems().get(itemId);
+		CoinFlowSession.TrackedItem removedExpense = previousSession.getTrackedExpenses().get(itemId);
+		long grossDelta = plugin.session.getGrossProfit() - previousSession.getGrossProfit();
+		long expenseDelta = plugin.session.getTotalExpenses() - previousSession.getTotalExpenses();
+		if (removedGain != null || removedExpense != null)
+		{
+			String itemName = removedGain != null ? removedGain.getName() : removedExpense.getName();
+			long netDelta = plugin.session.getTotalProfit() - previousSession.getTotalProfit();
+			log.debug("{}: item='{}' id={} gain={} gp (x{}), expense={} gp (x{}), grossDelta={} gp, expenseDelta={} gp, netDelta={} gp, sessionNet={} gp",
+				action, itemName, itemId,
+				removedGain != null ? removedGain.getTotalValue() : 0L,
+				removedGain != null ? removedGain.getQuantity() : 0L,
+				removedExpense != null ? removedExpense.getTotalValue() : 0L,
+				removedExpense != null ? removedExpense.getQuantity() : 0L,
+				grossDelta, expenseDelta, netDelta, plugin.session.getTotalProfit());
+		}
+		if (grossDelta != 0 || expenseDelta != 0)
+		{
+			plugin.activityTimeline.recordCorrection(grossDelta, expenseDelta);
+			boolean trackSpent = plugin.config == null || plugin.config.trackSpent();
+			long previousProfit = trackSpent ? previousSession.getTotalProfit() : previousSession.getGrossProfit();
+			long correctedProfit = trackSpent ? plugin.session.getTotalProfit() : plugin.session.getGrossProfit();
+			if (correctedProfit != previousProfit)
+			{
+				plugin.profitHistory.recordCorrection(correctedProfit);
+			}
+		}
 
 		// The session totals changed without an activity — resync the timeline's
 		// baselines so the removal isn't attributed to whatever segment is live.

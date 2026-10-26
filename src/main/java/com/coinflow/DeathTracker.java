@@ -143,6 +143,7 @@ public class DeathTracker
 	 */
 	private long pendingChatFee;
 	private int pendingChatFeeTick = -1;
+	private int lastChatFeeTick = -1;
 	/** Tick of the last retrieval settle; gates the post-close recovery grace. */
 	private int lastRetrievalSettleTick = -1;
 	/**
@@ -463,6 +464,7 @@ public class DeathTracker
 		}
 		pendingChatFee += amount;
 		pendingChatFeeTick = tick;
+		lastChatFeeTick = tick;
 	}
 
 	/**
@@ -481,13 +483,14 @@ public class DeathTracker
 	}
 
 	/**
-	 * Whether a reclaim settled or a gravestone claim was announced recently
-	 * enough that ledger-matching gains should count as recovery even
-	 * without a Take click.
+	 * Whether a reclaim settled, a gravestone claim was announced, or a fee
+	 * was reported recently enough that ledger-matching gains count as
+	 * recovery even without a Take click.
 	 */
 	boolean inRecoveryGrace(int tick)
 	{
-		return hasLedger() && (recentlySettled(tick) || recentlyRetrievedFromGrave(tick));
+		return hasLedger()
+			&& (recentlySettled(tick) || recentlyRetrievedFromGrave(tick) || recentlyCharged(tick));
 	}
 
 	private boolean recentlySettled(int tick)
@@ -498,6 +501,11 @@ public class DeathTracker
 	private boolean recentlyRetrievedFromGrave(int tick)
 	{
 		return graveRetrievalTick >= 0 && tick - graveRetrievalTick <= RECOVERY_GRACE_TICKS;
+	}
+
+	private boolean recentlyCharged(int tick)
+	{
+		return lastChatFeeTick >= 0 && tick - lastChatFeeTick <= RECOVERY_GRACE_TICKS;
 	}
 
 	/**
@@ -712,6 +720,7 @@ public class DeathTracker
 		graveRetrievalTick = -1;
 		pendingChatFee = 0;
 		pendingChatFeeTick = -1;
+		lastChatFeeTick = -1;
 		takeClicks.clear();
 	}
 }

@@ -86,6 +86,18 @@ public class CoinFlowPanelActivityTest
 	}
 
 	@Test
+	public void timelineView_showsCorrectionWithoutReplacingCurrentActivity()
+	{
+		plugin.activityTimeline.recordCorrection(-500, 0);
+		panel.timelineTotalsView = false;
+		panel.refreshTimelineCardView();
+
+		Assert.assertEquals(5, rowCount());
+		Assert.assertEquals("Session adjustment", nameOf(0).getText());
+		Assert.assertEquals("Banking / GE", plugin.activityTimeline.getCurrentSegment().label);
+	}
+
+	@Test
 	public void totalsView_collapsesRepeatedActivities()
 	{
 		panel.timelineTotalsView = true;

@@ -913,7 +913,8 @@ public class CoinFlowPanel extends PluginPanel
 
 		List<ActivityTimeline.Segment> segments = plugin.activityTimeline != null
 			? plugin.activityTimeline.getSegments() : Collections.emptyList();
-		ActivityTimeline.Segment current = segments.isEmpty() ? null : segments.get(segments.size() - 1);
+		ActivityTimeline.Segment current = plugin.activityTimeline != null
+			? plugin.activityTimeline.getCurrentSegment() : null;
 
 		timelineCollapsedPreviewLabel.setFont(FontManager.getRunescapeSmallFont());
 		timelineCollapsedPreviewLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
@@ -1035,12 +1036,12 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			return rows;
 		}
-		ActivityTimeline.Segment current = segments.get(segments.size() - 1);
+		ActivityTimeline.Segment current = plugin.activityTimeline.getCurrentSegment();
 		if (!timelineTotalsView)
 		{
 			for (int i = segments.size() - 1; i >= 0; i--)
 			{
-				RowStats row = RowStats.of(segments.get(i), i == segments.size() - 1);
+				RowStats row = RowStats.of(segments.get(i), segments.get(i).live);
 				if (!isEmptyOther(row))
 				{
 					rows.add(row);
@@ -1054,11 +1055,11 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			visits.merge(RowStats.key(seg.kind, seg.label), 1, Integer::sum);
 		}
-		String liveKey = RowStats.key(current.kind, current.label);
+		String liveKey = current != null ? RowStats.key(current.kind, current.label) : null;
 		for (ActivityTimeline.Aggregate agg : plugin.activityTimeline.aggregateByLabel())
 		{
 			String key = RowStats.key(agg.kind, agg.label);
-			RowStats row = RowStats.of(agg, visits.getOrDefault(key, 1), key.equals(liveKey));
+			RowStats row = RowStats.of(agg, visits.getOrDefault(key, 1), liveKey != null && key.equals(liveKey));
 			if (!isEmptyOther(row))
 			{
 				rows.add(row);
@@ -1215,6 +1216,7 @@ public class CoinFlowPanel extends PluginPanel
 	private static boolean showsRate(RowStats stats)
 	{
 		return stats.kind != ActivityTimeline.Kind.BANKING && stats.kind != ActivityTimeline.Kind.AFK
+			&& stats.kind != ActivityTimeline.Kind.CORRECTION
 			&& stats.totalTime.getSeconds() >= MIN_RATE_SECONDS;
 	}
 
@@ -1244,6 +1246,10 @@ public class CoinFlowPanel extends PluginPanel
 	 */
 	private static String activityDetailText(RowStats stats, boolean includeAfk)
 	{
+		if (stats.kind == ActivityTimeline.Kind.CORRECTION)
+		{
+			return "Manual adjustment";
+		}
 		StringBuilder sb = new StringBuilder(formatDuration(stats.totalTime));
 		if (stats.kind == ActivityTimeline.Kind.COMBAT && stats.kills > 0)
 		{
@@ -1265,12 +1271,19 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			sb.append(" (now)");
 		}
-		sb.append("<br>Time: ").append(formatDuration(stats.totalTime));
-		if (stats.activeTime.compareTo(stats.totalTime) < 0)
+		if (stats.kind == ActivityTimeline.Kind.CORRECTION)
 		{
-			sb.append(" (").append(formatDuration(stats.activeTime)).append(" active)");
+			sb.append("<br>Manual correction to session totals");
 		}
-		sb.append(", ").append(Math.round(timeShare(stats, totalSecs) * 100)).append("% of session");
+		else
+		{
+			sb.append("<br>Time: ").append(formatDuration(stats.totalTime));
+			if (stats.activeTime.compareTo(stats.totalTime) < 0)
+			{
+				sb.append(" (").append(formatDuration(stats.activeTime)).append(" active)");
+			}
+			sb.append(", ").append(Math.round(timeShare(stats, totalSecs) * 100)).append("% of session");
+		}
 		if (stats.visits > 1)
 		{
 			sb.append("<br>Stints: ").append(stats.visits);
@@ -1316,7 +1329,8 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			return;
 		}
-		timelineCollapsedPreviewLabel.setText(segments.get(segments.size() - 1).label);
+		ActivityTimeline.Segment current = plugin.activityTimeline.getCurrentSegment();
+		timelineCollapsedPreviewLabel.setText(current != null ? current.label : "No activity");
 
 		List<RowStats> stats = currentRowStats(segments);
 		// A zero-net "Other" row gaining or losing its first value changes the

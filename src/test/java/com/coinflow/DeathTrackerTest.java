@@ -437,6 +437,20 @@ public class DeathTrackerTest
 	}
 
 	@Test
+	public void chatFee_opensRecoveryGraceForLateItems()
+	{
+		tracker.recordLost(map(4151, 1), prices(4151, 1_500_000L));
+		tracker.noteChatFee(8_000, 300);
+
+		Assert.assertTrue(tracker.inRecoveryGrace(300));
+		Map<Integer, Integer> gains = new HashMap<>(map(4151, 1));
+		DeathTracker.RecoveryResult result = tracker.recover(gains);
+		Assert.assertEquals(1_500_000L, result.value);
+		Assert.assertTrue(gains.isEmpty());
+		Assert.assertFalse(tracker.inRecoveryGrace(300 + DeathTracker.RECOVERY_GRACE_TICKS + 1));
+	}
+
+	@Test
 	public void inRecoveryGrace_expires()
 	{
 		tracker.recordLost(map(4151, 1), prices(4151, 1_500_000L));
