@@ -32,7 +32,10 @@ public final class ItemPricing
 		// untradeable, unalchable, nominal HA ~1,200 gp each.
 		ItemID.VARLAMORE_BONE_STATUETTE01,
 		ItemID.VARLAMORE_BONE_STATUETTE02,
-		ItemID.VARLAMORE_BONE_STATUETTE03
+		ItemID.VARLAMORE_BONE_STATUETTE03,
+		// Activated blood essence — untradeable, unalchable (destroy-only,
+		// disintegrates after 1,000 charges); nominal HA 60k is unrealizable.
+		ItemID.BLOOD_ESSENCE_ACTIVE
 	)));
 
 	/**

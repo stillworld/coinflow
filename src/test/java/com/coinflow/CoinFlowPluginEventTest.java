@@ -2893,6 +2893,79 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(0L, plugin.session.getTotalProfit());
 	}
 
+	@Test
+	public void sailingCargo_quickDepositAll_booksNothing()
+	{
+		int ballId = 31914;
+		stubTrackableItem(ballId, "Rune cannonball", 677L);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(1);
+
+		ItemContainer invWithBalls = mockContainer(InventoryID.INV, ballId, 2);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(invWithBalls);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, invWithBalls));
+		Assert.assertTrue(plugin.snapshotInitialized);
+
+		// Right-click "Deposit-all" on the closed cargo hold object: the items
+		// leave the inventory with no cargo-hold ItemContainerChanged (the
+		// client-side hold stays stale until the interface is opened), so the
+		// intent's re-baseline window is what keeps this from booking spent.
+		net.runelite.api.MenuEntry entry = mock(net.runelite.api.MenuEntry.class);
+		when(entry.getOption()).thenReturn("Deposit-all");
+		when(entry.getTarget()).thenReturn("Ironwood cargo hold");
+		plugin.onMenuOptionClicked(new MenuOptionClicked(entry));
+
+		ItemContainer emptyInv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(emptyInv);
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, emptyInv));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(0L, plugin.session.getTotalProfit());
+	}
+
+	@Test
+	public void sailingCargo_boatLost_chargesDestroyedCargo()
+	{
+		int ballId = 31914;
+		int fishId = 7944;
+		stubTrackableItem(ballId, "Rune cannonball", 677L);
+		stubTrackableItem(fishId, "Raw monkfish", 82L);
+		when(client.getGameState()).thenReturn(GameState.LOGGED_IN);
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(1);
+
+		ItemContainer inv = mockContainer(InventoryID.INV);
+		when(client.getItemContainer(InventoryID.INV)).thenReturn(inv);
+		ItemContainer hold = mockContainer(
+			net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD, ballId, 2, fishId, 3);
+		when(client.getItemContainer(net.runelite.api.gameval.InventoryID.SAILING_BOAT_1_CARGOHOLD))
+			.thenReturn(hold);
+
+		// Baseline: hold contents merge into the snapshot and are cached.
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV, inv));
+		Assert.assertTrue(plugin.snapshotInitialized);
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+
+		// Boat lost at sea: SAILING_BOAT_SPAWNED flips to 0 and the hold's
+		// contents are destroyed (abandon/sink/capsize/recovery all lose them).
+		when(client.getVarbitValue(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED)).thenReturn(0);
+		VarbitChanged despawn = new VarbitChanged();
+		despawn.setVarbitId(net.runelite.api.gameval.VarbitID.SAILING_BOAT_SPAWNED);
+		despawn.setValue(0);
+		plugin.onVarbitChanged(despawn);
+
+		long expected = 2 * 677L + 3 * 82L;
+		Assert.assertEquals(expected, plugin.session.getTotalExpenses());
+		CoinFlowSession.TrackedItem row =
+			plugin.session.getTrackedExpenses().get(InventorySnapshotService.CARGO_LOSS_ROW_ID);
+		Assert.assertNotNull("Boat cargo lost row must exist", row);
+		Assert.assertEquals("Boat cargo lost", row.getName());
+		Assert.assertEquals(expected, row.getQuantity());
+
+		// Single-shot: a second despawn event with no new contents bills nothing.
+		plugin.onVarbitChanged(despawn);
+		Assert.assertEquals(expected, plugin.session.getTotalExpenses());
+	}
+
 	private ItemContainer mockContainer(int containerId, int... idQtyPairs)
 	{
 		ItemContainer container = org.mockito.Mockito.mock(ItemContainer.class);
@@ -8936,6 +9009,57 @@ public class CoinFlowPluginEventTest
 		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(casketId));
 	}
 
+	// ── Blood essence activation ─────────────────────────────────────────
+
+	@Test
+	public void activateBloodEssence_expensesAtMarketPrice()
+	{
+		int essenceId = ItemID.BLOOD_ESSENCE_INACTIVE;
+		int activeId = ItemID.BLOOD_ESSENCE_ACTIVE;
+		stubTrackableItem(essenceId, "Blood essence", 70_000L);
+		stubUntradeableItemWithHa(activeId, "Blood essence (active)", 60_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, essenceId, 1)));
+
+		net.runelite.api.MenuEntry entry = mock(net.runelite.api.MenuEntry.class);
+		when(entry.getOption()).thenReturn("Activate");
+		when(entry.getTarget()).thenReturn("<col=ff9040>Blood essence</col>");
+		when(entry.getType()).thenReturn(net.runelite.api.MenuAction.CC_OP);
+		when(entry.getItemId()).thenReturn(essenceId);
+		plugin.onMenuOptionClicked(new MenuOptionClicked(entry));
+
+		// One-way consume: the tradeable essence leaves, the untradeable
+		// unalchable "(active)" variant arrives.
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, activeId, 1)));
+
+		Assert.assertEquals(70_000L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(-70_000L, plugin.session.getTotalProfit());
+		Assert.assertNull("Activated variant is valueless — no phantom gain",
+			plugin.session.getTrackedItems().get(activeId));
+		Assert.assertNull("Activation must not enter drop bookkeeping",
+			plugin.recentlyDroppedOwnedItems.get(essenceId));
+		Assert.assertTrue("Intent consumed once the loss is seen", plugin.recentOpenIntents.isEmpty());
+	}
+
+	@Test
+	public void bloodEssenceLost_withoutActivateIntent_doesNotExpense()
+	{
+		int essenceId = ItemID.BLOOD_ESSENCE_INACTIVE;
+		stubTrackableItem(essenceId, "Blood essence", 70_000L);
+
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV, essenceId, 1)));
+
+		// Unexplained loss (no Activate click) keeps the plain drop path.
+		plugin.onItemContainerChanged(new ItemContainerChanged(InventoryID.INV,
+			mockContainer(InventoryID.INV)));
+
+		Assert.assertEquals(0L, plugin.session.getTotalExpenses());
+		Assert.assertEquals(Integer.valueOf(1), plugin.recentlyDroppedOwnedItems.get(essenceId));
+	}
+
 	// ── Overlay right-click menu & item-row session actions ─────────────
 
 	@Test
@@ -9301,7 +9425,3 @@ public class CoinFlowPluginEventTest
 		Assert.assertTrue(plugin.getSession().getTrackedItems().isEmpty());
 	}
 }
-
-
-
-

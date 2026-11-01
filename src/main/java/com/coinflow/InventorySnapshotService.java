@@ -43,6 +43,16 @@ public class InventorySnapshotService
 		InventoryID.SAILING_BOAT_5_CARGOHOLD
 	};
 
+	/**
+	 * Synthetic GP-denominated expense row for cargo destroyed with the boat —
+	 * every loss path (abandoned/sunk/capsized, or a port-wizard recovery,
+	 * which is always "without cargo") empties the hold, so a despawn while
+	 * it held items is a real loss like Death. Hull-part icon, name is what
+	 * shows in the Spent breakdown.
+	 */
+	static final int CARGO_LOSS_ROW_ID = ItemID.SAILING_BOAT_HULL_PART_WOODEN;
+	static final String CARGO_LOSS_ROW_NAME = "Boat cargo lost";
+
 	private static final int[] SCROLL_BOOK_VARBITS = {
 		VarbitID.BOOKOFSCROLLS_NARDAH,
 		VarbitID.BOOKOFSCROLLS_DIGSITE,
@@ -272,6 +282,7 @@ public class InventorySnapshotService
 		// shots) diffs as a real loss.
 		if (isSailingBoatSpawned())
 		{
+			Map<Integer, Integer> cargoNow = new HashMap<>();
 			for (int cargoId : SAILING_CARGOHOLD_IDS)
 			{
 				ItemContainer cargo = client.getItemContainer(cargoId);
@@ -283,10 +294,13 @@ public class InventorySnapshotService
 				{
 					if (item != null && item.getId() > 0 && item.getQuantity() > 0)
 					{
-						map.merge(normalizeContainerItemId(item.getId()), item.getQuantity(), Integer::sum);
+						cargoNow.merge(normalizeContainerItemId(item.getId()), item.getQuantity(), Integer::sum);
 					}
 				}
 			}
+			cargoNow.forEach((id, qty) -> map.merge(id, qty, Integer::sum));
+			cachedCargoHoldContents.clear();
+			cachedCargoHoldContents.putAll(cargoNow);
 		}
 
 		return InventorySnapshot.fromMap(map);
@@ -365,6 +379,11 @@ public class InventorySnapshotService
 	}
 
 	private final Map<Integer, Integer> cachedLootingBagContents = new HashMap<>();
+
+	// Last-seen merged contents of the spawned boat's cargo holds. Refreshed
+	// on every snapshot while a boat is spawned; survives the despawn varbit
+	// flip so InventoryDiffProcessor can charge the destroyed contents.
+	private final Map<Integer, Integer> cachedCargoHoldContents = new HashMap<>();
 
 	/**
 	 * Returns true if the item ID matches an Open Looting Bag variant.
@@ -453,6 +472,18 @@ public class InventorySnapshotService
 	public synchronized Map<Integer, Integer> getLootingBagContents()
 	{
 		return new HashMap<>(cachedLootingBagContents);
+	}
+
+	/**
+	 * Returns and clears the last-seen cargo-hold contents. Taking (rather
+	 * than peeking) makes the despawn charge single-shot: a second flip with
+	 * no interim spawn-side snapshot sees nothing to bill.
+	 */
+	public synchronized Map<Integer, Integer> takeCargoHoldContents()
+	{
+		Map<Integer, Integer> copy = new HashMap<>(cachedCargoHoldContents);
+		cachedCargoHoldContents.clear();
+		return copy;
 	}
 
 	/**
