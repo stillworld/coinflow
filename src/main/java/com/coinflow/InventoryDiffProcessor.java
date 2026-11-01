@@ -1067,6 +1067,15 @@ final class InventoryDiffProcessor
 		// hold's contents as a phantom gain or loss.
 		if (varbitId == VarbitID.SAILING_BOAT_SPAWNED)
 		{
+			// Every despawn path destroys the hold's contents — abandoned,
+			// sunk or capsized at sea, and even port-wizard recoveries are
+			// always "without cargo" — so a flip to 0 while the hold held
+			// items is a real loss, not a storage transition: charge the
+			// last-seen contents on a synthetic row like a Death charge.
+			if (event.getValue() == 0)
+			{
+				settleDestroyedCargo();
+			}
 			plugin.rebaselineGraceTicks = Math.max(plugin.rebaselineGraceTicks, 3);
 			plugin.setNeedsRebaseline(true);
 		}
@@ -1136,6 +1145,52 @@ final class InventoryDiffProcessor
 				&& !plugin.deathTracker.isPending();
 			plugin.weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
 				plugin.client.getTickCount());
+		}
+	}
+
+	/**
+	 * Charges the boat's destroyed cargo hold contents as a single synthetic
+	 * expense row when the spawned-boat varbit flips to 0. Destroyed session
+	 * gains are also marked consumed so a later drop or sale of pre-session
+	 * stock of the same id can't deduct them a second time.
+	 */
+	private void settleDestroyedCargo()
+	{
+		Map<Integer, Integer> cargo = plugin.getSnapshotService().takeCargoHoldContents();
+		if (cargo.isEmpty())
+		{
+			return;
+		}
+
+		Map<Integer, Long> consumed = new HashMap<>();
+		long totalValue = 0;
+		for (Map.Entry<Integer, Integer> entry : cargo.entrySet())
+		{
+			int canonicalId = plugin.canonicalize(entry.getKey());
+			consumed.merge(canonicalId, (long) entry.getValue(), Long::sum);
+			ItemComposition comp = plugin.itemManager != null
+				? plugin.itemManager.getItemComposition(canonicalId) : null;
+			String name = comp != null ? comp.getName() : "";
+			if (ConsumableRegistry.isIgnoredName(name, plugin.ignoredItemNames))
+			{
+				continue;
+			}
+			totalValue += ItemPricing.priceOf(entry.getKey(), plugin.itemManager) * entry.getValue();
+		}
+
+		if (plugin.session != null)
+		{
+			if (totalValue > 0)
+			{
+				Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
+				expenses.put(InventorySnapshotService.CARGO_LOSS_ROW_ID,
+					new CoinFlowSession.TrackedItem(InventorySnapshotService.CARGO_LOSS_ROW_ID,
+						InventorySnapshotService.CARGO_LOSS_ROW_NAME, totalValue, 1L));
+				plugin.session = plugin.session.withGainsLossesAndExpenses(
+					Collections.emptyMap(), Collections.emptyMap(), expenses);
+				log.debug("Boat cargo lost: {} gp across {} item types", totalValue, consumed.size());
+			}
+			plugin.session = plugin.session.markConsumed(consumed);
 		}
 	}
 

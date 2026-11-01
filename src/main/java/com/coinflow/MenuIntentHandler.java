@@ -6,6 +6,7 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Skill;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.util.Text;
 
@@ -17,6 +18,13 @@ import net.runelite.client.util.Text;
 @Slf4j
 final class MenuIntentHandler
 {
+	/**
+	 * Re-baseline window for a cargo-hold quick deposit — the hold object can
+	 * be several tiles away and the server removes the items a few ticks
+	 * after the click.
+	 */
+	private static final int CARGO_HOLD_DEPOSIT_GRACE_TICKS = 12;
+
 	private final CoinFlowPlugin plugin;
 
 	MenuIntentHandler(CoinFlowPlugin plugin)
@@ -100,7 +108,15 @@ final class MenuIntentHandler
 			{
 				String[] parts = lowerTarget.split("->");
 				String dest = parts.length > 1 ? parts[1].trim() : "";
-				if (ActionClassifiers.isContainerOrChargedItemTarget(dest)
+				if (dest.contains("cargo hold"))
+				{
+					// Using an item on a boat's cargo hold is a single-item
+					// quick deposit — same stale-hold transfer as Deposit-all.
+					plugin.interfaceTracker.setNeedsRebaseline(true);
+					plugin.rebaselineGraceTicks = Math.max(plugin.rebaselineGraceTicks, CARGO_HOLD_DEPOSIT_GRACE_TICKS);
+					log.debug("Cargo hold item deposit clicked ('{}'), scheduling rebaseline", target);
+				}
+				else if (ActionClassifiers.isContainerOrChargedItemTarget(dest)
 					|| (ActionClassifiers.isContainerOrChargedItemTarget(parts[0].trim()) && (dest.contains("bank") || dest.contains("deposit"))))
 				{
 					plugin.weaponChargeTracker.recordUseSource(parts[0]);
@@ -142,6 +158,18 @@ final class MenuIntentHandler
 				log.debug("Open/loot intent on inventory item '{}' (id {}), recording", target, openId);
 			}
 		}
+		// Activating a blood essence irreversibly converts the tradeable stack
+		// item into the untradeable "(active)" variant — a consume, like opening
+		// a casket for its contents. An open intent expenses the lost essence at
+		// market price; the active variant is valueless and strips from gains.
+		else if ("Activate".equalsIgnoreCase(option)
+			&& event.getMenuAction() == net.runelite.api.MenuAction.CC_OP
+			&& event.getItemId() == ItemID.BLOOD_ESSENCE_INACTIVE)
+		{
+			plugin.recentOpenIntents.put(ItemID.BLOOD_ESSENCE_INACTIVE, tick);
+			log.debug("Blood essence activate clicked (id {}), recording open intent",
+				ItemID.BLOOD_ESSENCE_INACTIVE);
+		}
 		else if (option.toLowerCase(Locale.ROOT).startsWith("collect")
 			&& (plugin.interfaceTracker.isTrackingSuppressed() || target.toLowerCase(Locale.ROOT).contains("grand exchange")))
 		{
@@ -151,7 +179,17 @@ final class MenuIntentHandler
 		}
 		else if (option.toLowerCase(Locale.ROOT).startsWith("store") || option.toLowerCase(Locale.ROOT).startsWith("deposit"))
 		{
-			if (plugin.client != null && plugin.client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) == 1)
+			// A right-click "Deposit-all" quick deposit on a boat's cargo hold
+			// removes items with no matching cargo-hold ItemContainerChanged —
+			// the client-side hold stays stale until the interface is opened —
+			// so the inventory loss would book as a supply expense.
+			if (target.contains("cargo"))
+			{
+				plugin.interfaceTracker.setNeedsRebaseline(true);
+				plugin.rebaselineGraceTicks = Math.max(plugin.rebaselineGraceTicks, CARGO_HOLD_DEPOSIT_GRACE_TICKS);
+				log.debug("Cargo hold quick deposit clicked ('{}' on '{}'), scheduling rebaseline", option, target);
+			}
+			else if (plugin.client != null && plugin.client.getVarbitValue(VarbitID.INSIDE_WILDERNESS) == 1)
 			{
 				ItemContainer inv = plugin.client.getItemContainer(InventoryID.INV);
 				if (inv != null && plugin.hasLootingBag(inv))

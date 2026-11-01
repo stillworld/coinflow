@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  */
 public final class CoinFlowSession
 {
-	private static final Pattern GP_PATTERN = Pattern.compile("^\\s*(\\d{1,3}(,\\d{3})*|\\d+)(\\.\\d+)?[kmbKMB]?\\s*$");
+	private static final Pattern GP_PATTERN = Pattern.compile("^(\\d+(\\.\\d*)?|\\.\\d+)[kmbKMB]?$");
 	private static final Pattern DISALLOWED_NAME_CHARS = Pattern.compile("[^a-zA-Z0-9 '()/\\-]");
 	private static final long MAX_ALLOWED_GP = 2_000_000_000_000L; // 2 Trillion GP
 	/**
@@ -481,9 +481,10 @@ public final class CoinFlowSession
 	/**
 	 * True for synthetic GP-denominated ledger rows that are not real
 	 * inventory items: "Death" ({@link DeathTracker#DEATH_ROW_ID}), "GE Tax"
-	 * ({@link GrandExchangeTax#TAX_ITEM_ID}) and "Blast Furnace coffer"
-	 * ({@link BlastFurnaceTracker#COFFER_ROW_ID}) and "Barrows wear"
-	 * ({@link com.coinflow.reconciliation.BarrowsWear#WEAR_ROW_ID}). Their
+	 * ({@link GrandExchangeTax#TAX_ITEM_ID}), "Blast Furnace coffer"
+	 * ({@link BlastFurnaceTracker#COFFER_ROW_ID}), "Barrows wear"
+	 * ({@link com.coinflow.reconciliation.BarrowsWear#WEAR_ROW_ID}) and
+	 * "Boat cargo lost" ({@link InventorySnapshotService#CARGO_LOSS_ROW_ID}). Their
 	 * backing ids (Skull, coin piles, interface sprite) must never be offered
 	 * to the ignored-items list, and the rows carry gp as their quantity at
 	 * price 1.
@@ -493,6 +494,7 @@ public final class CoinFlowSession
 		return itemId == DeathTracker.DEATH_ROW_ID
 			|| itemId == GrandExchangeTax.TAX_ITEM_ID
 			|| itemId == BlastFurnaceTracker.COFFER_ROW_ID
+			|| itemId == InventorySnapshotService.CARGO_LOSS_ROW_ID
 			|| itemId == com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID;
 	}
 
@@ -961,7 +963,10 @@ public final class CoinFlowSession
 		{
 			throw new NumberFormatException("Input cannot be empty");
 		}
-		String trimmed = text.trim();
+		// Commas and spaces are visual grouping only — strip them before
+		// validation so misplaced separators (e.g. "2000,000") normalize
+		// instead of failing.
+		String trimmed = text.trim().replace(",", "").replaceAll("\\s", "");
 		if (trimmed.isEmpty())
 		{
 			throw new NumberFormatException("Input cannot be empty");
@@ -971,7 +976,7 @@ public final class CoinFlowSession
 			throw new NumberFormatException("Special characters and invalid formats are not accepted. Use numbers with optional shorthand (e.g. 10m, 500k, 2.5m, 1,000,000).");
 		}
 
-		String clean = trimmed.toLowerCase().replace(",", "").replace(" ", "");
+		String clean = trimmed.toLowerCase();
 
 		double multiplier = 1.0;
 		if (clean.endsWith("k"))
@@ -1010,12 +1015,18 @@ public final class CoinFlowSession
 		{
 			throw new NumberFormatException("Amount must be greater than zero");
 		}
-		if (total > MAX_ALLOWED_GP)
+
+		long result = Math.round(total);
+		if (result <= 0)
+		{
+			throw new NumberFormatException("Amount must be at least 1 gp");
+		}
+		if (result > MAX_ALLOWED_GP)
 		{
 			throw new NumberFormatException("Amount cannot exceed 2,000,000,000,000 gp");
 		}
 
-		return (long) total;
+		return result;
 	}
 
 	/**

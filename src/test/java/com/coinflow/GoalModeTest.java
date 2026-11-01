@@ -18,6 +18,50 @@ public class GoalModeTest
 		Assert.assertEquals(750L, CoinFlowPanel.parseGpText("750"));
 	}
 
+	@Test
+	public void testParseGpTextMisplacedCommas()
+	{
+		// Commas are grouping hints only — misplaced or missing separators
+		// normalize to the digit value rather than failing.
+		Assert.assertEquals(2_000_000L, CoinFlowPanel.parseGpText("2000,000"));
+		Assert.assertEquals(2_000_000L, CoinFlowPanel.parseGpText("2,000,000"));
+		Assert.assertEquals(2_000_000L, CoinFlowPanel.parseGpText("20,00,000"));
+		Assert.assertEquals(1_000_000L, CoinFlowPanel.parseGpText("1,0000,00"));
+		Assert.assertEquals(25_000L, CoinFlowPanel.parseGpText("2,5,0,0,0"));
+	}
+
+	@Test
+	public void testParseGpTextShorthandDecimals()
+	{
+		// Leading/trailing-dot decimals normalize like any other fraction.
+		Assert.assertEquals(500_000L, CoinFlowPanel.parseGpText(".5m"));
+		Assert.assertEquals(500_000L, CoinFlowPanel.parseGpText("0.5m"));
+		Assert.assertEquals(5_000L, CoinFlowPanel.parseGpText("5.k"));
+		Assert.assertEquals(250L, CoinFlowPanel.parseGpText(".25k"));
+		// Fractional results round to the nearest gp.
+		Assert.assertEquals(2_500L, CoinFlowPanel.parseGpText("2.4999k"));
+		// Whitespace inside the number is ignored like spaces.
+		Assert.assertEquals(1_000_000L, CoinFlowPanel.parseGpText("1\t000 000"));
+	}
+
+	@Test
+	public void testParseGpTextSubGpAmountsRejected()
+	{
+		String[] subGp = {"0.4", "0.0004k", "0.000000001m", ".3"};
+		for (String input : subGp)
+		{
+			try
+			{
+				CoinFlowPanel.parseGpText(input);
+				Assert.fail("Expected NumberFormatException for sub-gp input: " + input);
+			}
+			catch (NumberFormatException expected)
+			{
+				// Expected
+			}
+		}
+	}
+
 	@Test(expected = NumberFormatException.class)
 	public void testParseGpTextInvalid()
 	{
@@ -36,6 +80,7 @@ public class GoalModeTest
 		Assert.assertEquals(10_000L, CoinFlowSession.parseGoalAmount("10000"));
 		Assert.assertEquals(10_000_000L, CoinFlowSession.parseGoalAmount("10m"));
 		Assert.assertEquals(500_000L, CoinFlowSession.parseGoalAmount("500k"));
+		Assert.assertEquals(2_000_000L, CoinFlowSession.parseGoalAmount("2000,000"));
 		Assert.assertEquals(0L, CoinFlowSession.parseGoalAmount(""));
 		Assert.assertEquals(0L, CoinFlowSession.parseGoalAmount(null));
 		Assert.assertEquals(0L, CoinFlowSession.parseGoalAmount("invalid"));
@@ -179,6 +224,35 @@ public class GoalModeTest
 
 		gpField.setText("$$10m!!@#");
 		Assert.assertEquals("10m", gpField.getText());
+	}
+
+	@Test
+	public void testBlankSetGoalClearsGoal() throws Exception
+	{
+		CoinFlowPlugin plugin = org.mockito.Mockito.mock(CoinFlowPlugin.class);
+		CoinFlowConfig config = org.mockito.Mockito.mock(CoinFlowConfig.class);
+		net.runelite.client.config.ConfigManager configManager = org.mockito.Mockito.mock(net.runelite.client.config.ConfigManager.class);
+		net.runelite.client.game.ItemManager itemManager = org.mockito.Mockito.mock(net.runelite.client.game.ItemManager.class);
+
+		org.mockito.Mockito.when(config.goalAmount()).thenReturn("1,000,000");
+		org.mockito.Mockito.when(config.goalName()).thenReturn("Old Goal");
+
+		CoinFlowPanel panel = new CoinFlowPanel(plugin, config, configManager, itemManager);
+		panel.init();
+
+		java.lang.reflect.Field field = CoinFlowPanel.class.getDeclaredField("targetGpField");
+		field.setAccessible(true);
+		// The document filter strips spaces, leaving the field blank.
+		((javax.swing.JTextField) field.get(panel)).setText("   ");
+
+		java.lang.reflect.Field button = CoinFlowPanel.class.getDeclaredField("setGoalButton");
+		button.setAccessible(true);
+		((javax.swing.JButton) button.get(panel)).doClick();
+
+		org.mockito.Mockito.verify(configManager)
+			.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalAmount", "");
+		org.mockito.Mockito.verify(configManager)
+			.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalName", "");
 	}
 
 	@Test
