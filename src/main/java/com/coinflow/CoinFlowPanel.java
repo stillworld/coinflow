@@ -388,14 +388,7 @@ public class CoinFlowPanel extends PluginPanel
 		});
 
 		styleButton(clearGoalButton);
-		clearGoalButton.addActionListener(e -> {
-			configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalAmount", "");
-			configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalName", "");
-			targetGpField.setText("");
-			goalNameField.setText("");
-			editingGoal = false;
-			refreshGoalCardView();
-		});
+		clearGoalButton.addActionListener(e -> clearGoal());
 
 		activeGoalActionsPanel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		activeGoalActionsPanel.setPreferredSize(new Dimension(0, 26));
@@ -412,14 +405,17 @@ public class CoinFlowPanel extends PluginPanel
 
 		styleButton(miniClearGoalButton);
 		miniClearGoalButton.setPreferredSize(new Dimension(42, 18));
-		miniClearGoalButton.addActionListener(e -> {
-			configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalAmount", "");
-			configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalName", "");
-			targetGpField.setText("");
-			goalNameField.setText("");
-			editingGoal = false;
-			refreshGoalCardView();
-		});
+		miniClearGoalButton.addActionListener(e -> clearGoal());
+	}
+
+	private void clearGoal()
+	{
+		configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalAmount", "");
+		configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalName", "");
+		targetGpField.setText("");
+		goalNameField.setText("");
+		editingGoal = false;
+		refreshGoalCardView();
 	}
 
 	// ── Card Builders & Refreshers ───────────────────────────────────────
@@ -1924,6 +1920,10 @@ public class CoinFlowPanel extends PluginPanel
 		{
 			return "https://oldschool.runescape.wiki/w/Blast_Furnace";
 		}
+		if (item.getItemId() == InventorySnapshotService.CARGO_LOSS_ROW_ID)
+		{
+			return "https://oldschool.runescape.wiki/w/Cargo_hold";
+		}
 		if (item.getItemId() == com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID)
 		{
 			return "https://oldschool.runescape.wiki/w/Barrows_equipment#Degrading";
@@ -2081,7 +2081,7 @@ public class CoinFlowPanel extends PluginPanel
 
 		// Attach input filters to reject special characters in real time
 		((AbstractDocument) targetGpField.getDocument()).setDocumentFilter(
-			new CoinFlowInputFilter(CoinFlowInputFilter.TARGET_GP, 15)
+			new CoinFlowInputFilter(CoinFlowInputFilter.TARGET_GP, 20)
 		);
 		((AbstractDocument) goalNameField.getDocument()).setDocumentFilter(
 			new CoinFlowInputFilter(CoinFlowInputFilter.GOAL_NAME, 32)
@@ -2156,9 +2156,16 @@ public class CoinFlowPanel extends PluginPanel
 		// Buttons: Set Goal / Cancel
 		styleButton(setGoalButton);
 		setGoalButton.addActionListener(e -> {
+			String rawTarget = targetGpField.getText();
+			if (rawTarget == null || rawTarget.trim().isEmpty())
+			{
+				// Blank target clears the goal, matching the config's
+				// "blank to disable" semantics.
+				clearGoal();
+				return;
+			}
 			try
 			{
-				String rawTarget = targetGpField.getText();
 				long amount = parseGpText(rawTarget);
 				String name = CoinFlowSession.cleanGoalName(goalNameField.getText());
 				configManager.setConfiguration(CoinFlowConfig.CONFIG_GROUP, "goalAmount", QuantityFormatter.formatNumber(amount));
