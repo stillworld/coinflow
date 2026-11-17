@@ -3,9 +3,11 @@ package com.coinflow;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -24,6 +26,66 @@ public final class CoinFlowSession
 	 */
 	public static final class TrackedItem
 	{
+		/** Why the row was booked — shown in the item-row tooltip. */
+		public enum Reason
+		{
+			GAINED("Item gained"),
+			PROCESSING_OUTPUT("Skilling product"),
+			ALCHED("Alchemy proceeds", "Alched banked item"),
+			GE_SALE("GE sale"),
+			SHOP_SALE("Shop sale"),
+			POINTS_SHOP("Points / reward shop purchase"),
+			CONSUMED("Supply consumed"),
+			WEAPON_CHARGE("Charged-weapon resource"),
+			DOSE("Potion dose / food portion"),
+			DROPPED("Dropped"),
+			CASH_SPEND("Coins paid"),
+			SHOP_PURCHASE("Untradeable shop purchase"),
+			PROCESSING_INPUT("Skilling input"),
+			SYNTHETIC("Bookkeeping row");
+
+			private final String gainLabel;
+			private final String expenseLabel;
+
+			Reason(String label)
+			{
+				this(label, label);
+			}
+
+			Reason(String gainLabel, String expenseLabel)
+			{
+				this.gainLabel = gainLabel;
+				this.expenseLabel = expenseLabel;
+			}
+
+			public String label(boolean isExpense)
+			{
+				return isExpense ? expenseLabel : gainLabel;
+			}
+		}
+
+		/** How the row's price was derived — shown in the item-row tooltip. */
+		public enum PriceBasis
+		{
+			GE_PRICE("GE price"),
+			HIGH_ALCH("High-alch value"),
+			FIXED("Face value"),
+			PURCHASE_COST("What you paid"),
+			UNPRICED("No realizable value");
+
+			private final String label;
+
+			PriceBasis(String label)
+			{
+				this.label = label;
+			}
+
+			public String label()
+			{
+				return label;
+			}
+		}
+
 		private final int itemId;
 		private final String name;
 		private final long quantity;
@@ -39,6 +101,13 @@ public final class CoinFlowSession
 		 * quantity * priceEach after price changes.
 		 */
 		private final long remainingValue;
+		/**
+		 * Provenance for the row tooltip: why the row booked and how it was
+		 * priced. Merges union as entries accumulate. Empty when the row was
+		 * constructed without provenance.
+		 */
+		private final Set<Reason> reasons;
+		private final Set<PriceBasis> bases;
 
 		public TrackedItem(int itemId, String name, long quantity, long priceEach)
 		{
@@ -48,6 +117,14 @@ public final class CoinFlowSession
 		private TrackedItem(int itemId, String name, long quantity, long priceEach,
 			long totalValue, long remainingQuantity, long remainingValue)
 		{
+			this(itemId, name, quantity, priceEach, totalValue, remainingQuantity, remainingValue,
+				Collections.emptySet(), Collections.emptySet());
+		}
+
+		private TrackedItem(int itemId, String name, long quantity, long priceEach,
+			long totalValue, long remainingQuantity, long remainingValue,
+			Set<Reason> reasons, Set<PriceBasis> bases)
+		{
 			this.itemId = itemId;
 			this.name = name;
 			this.quantity = quantity;
@@ -55,6 +132,8 @@ public final class CoinFlowSession
 			this.totalValue = totalValue;
 			this.remainingQuantity = remainingQuantity;
 			this.remainingValue = remainingValue;
+			this.reasons = reasons;
+			this.bases = bases;
 		}
 
 		public int getItemId() { return itemId; }
@@ -64,6 +143,30 @@ public final class CoinFlowSession
 		public long getTotalValue() { return totalValue; }
 		public long getRemainingQuantity() { return remainingQuantity; }
 		public long getRemainingValue() { return remainingValue; }
+		public Set<Reason> getReasons() { return reasons; }
+		public Set<PriceBasis> getPriceBases() { return bases; }
+
+		/**
+		 * Returns a copy tagged with provenance for the row tooltip.
+		 */
+		public TrackedItem withProvenance(Reason reason, PriceBasis basis)
+		{
+			Set<Reason> rs = EnumSet.noneOf(Reason.class);
+			rs.addAll(reasons);
+			if (reason != null)
+			{
+				rs.add(reason);
+			}
+			Set<PriceBasis> bs = EnumSet.noneOf(PriceBasis.class);
+			bs.addAll(bases);
+			if (basis != null)
+			{
+				bs.add(basis);
+			}
+			return new TrackedItem(itemId, name, quantity, priceEach,
+				totalValue, remainingQuantity, remainingValue,
+				Collections.unmodifiableSet(rs), Collections.unmodifiableSet(bs));
+		}
 
 		/**
 		 * Returns a new TrackedItem with additional quantity added. Preserves the
@@ -74,7 +177,8 @@ public final class CoinFlowSession
 		{
 			long addedValue = additionalQty * priceEach;
 			return new TrackedItem(itemId, name, quantity + additionalQty, priceEach,
-				totalValue + addedValue, remainingQuantity + additionalQty, remainingValue + addedValue);
+				totalValue + addedValue, remainingQuantity + additionalQty, remainingValue + addedValue,
+				reasons, bases);
 		}
 
 		/**
@@ -82,7 +186,9 @@ public final class CoinFlowSession
 		 */
 		public TrackedItem withQuantity(long newQty)
 		{
-			return new TrackedItem(itemId, name, newQty, priceEach);
+			return new TrackedItem(itemId, name, newQty, priceEach,
+				newQty * priceEach, newQty, newQty * priceEach,
+				reasons, bases);
 		}
 
 		/**
@@ -95,20 +201,28 @@ public final class CoinFlowSession
 				? remainingValue * deducted / remainingQuantity
 				: 0;
 			return new TrackedItem(itemId, name, quantity - deducted, priceEach,
-				totalValue - removedValue, remainingQuantity - deducted, remainingValue - removedValue);
+				totalValue - removedValue, remainingQuantity - deducted, remainingValue - removedValue,
+				reasons, bases);
 		}
 
 		/**
 		 * Merges another tracked entry of the same item into this one. The
 		 * display price stays at this (latest) entry's price, while the credited
 		 * and remaining values are summed exactly — historical acquisition cost
-		 * is never repriced at the newer unit price.
+		 * is never repriced at the newer unit price. Provenance unions.
 		 */
 		public TrackedItem merge(TrackedItem other)
 		{
+			Set<Reason> rs = EnumSet.noneOf(Reason.class);
+			rs.addAll(reasons);
+			rs.addAll(other.reasons);
+			Set<PriceBasis> bs = EnumSet.noneOf(PriceBasis.class);
+			bs.addAll(bases);
+			bs.addAll(other.bases);
 			return new TrackedItem(itemId, name, quantity + other.quantity, priceEach,
 				totalValue + other.totalValue,
-				remainingQuantity + other.remainingQuantity, remainingValue + other.remainingValue);
+				remainingQuantity + other.remainingQuantity, remainingValue + other.remainingValue,
+				Collections.unmodifiableSet(rs), Collections.unmodifiableSet(bs));
 		}
 
 		/**
@@ -123,7 +237,8 @@ public final class CoinFlowSession
 				? remainingValue * newRemaining / remainingQuantity
 				: 0;
 			return new TrackedItem(itemId, name, quantity, priceEach,
-				totalValue, newRemaining, newRemainingValue);
+				totalValue, newRemaining, newRemainingValue,
+				reasons, bases);
 		}
 
 		/**
@@ -141,7 +256,8 @@ public final class CoinFlowSession
 			}
 			long restoredValue = Math.min(toRestore * priceEach, totalValue - remainingValue);
 			return new TrackedItem(itemId, name, quantity, priceEach,
-				totalValue, remainingQuantity + toRestore, remainingValue + restoredValue);
+				totalValue, remainingQuantity + toRestore, remainingValue + restoredValue,
+				reasons, bases);
 		}
 
 		@Override
@@ -154,13 +270,16 @@ public final class CoinFlowSession
 				quantity == that.quantity &&
 				priceEach == that.priceEach &&
 				totalValue == that.totalValue &&
+				remainingQuantity == that.remainingQuantity &&
+				remainingValue == that.remainingValue &&
 				java.util.Objects.equals(name, that.name);
 		}
 
 		@Override
 		public int hashCode()
 		{
-			return java.util.Objects.hash(itemId, name, quantity, priceEach, totalValue);
+			return java.util.Objects.hash(itemId, name, quantity, priceEach, totalValue,
+				remainingQuantity, remainingValue);
 		}
 	}
 

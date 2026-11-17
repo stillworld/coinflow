@@ -80,9 +80,11 @@ final class ShopTracker
 					// not an asset conversion.
 					ItemComposition comp = itemManager != null ? itemManager.getItemComposition(itemId) : null;
 					String name = comp != null && comp.getName() != null ? comp.getName() : "Item " + itemId;
-					CoinFlowSession.TrackedItem expense = cost % quantity == 0
+					CoinFlowSession.TrackedItem expense = (cost % quantity == 0
 						? new CoinFlowSession.TrackedItem(itemId, name, quantity, cost / quantity)
-						: new CoinFlowSession.TrackedItem(itemId, name, cost, 1L);
+						: new CoinFlowSession.TrackedItem(itemId, name, cost, 1L))
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.SHOP_PURCHASE,
+							CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST);
 					ledger.expenses.merge(itemId, expense, (a, b) -> a.merge(b));
 					ledger.netDelta -= cost;
 					log.debug("Shop purchase of unrealizable item expensed: {} x{} for {} gp", name, quantity, cost);

@@ -143,9 +143,10 @@ final class GameTickProcessor
 					int itemId = entry.getKey();
 					int quantity = entry.getValue();
 					String itemName = plugin.getItemName(itemId);
-					long price = ItemPricing.priceOf(itemId, plugin.itemManager);
-					wornAmmoExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-					log.debug("Consumed equipped ammo/jewelry on tick: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
+					ItemPricing.Priced priced = ItemPricing.priced(itemId, plugin.itemManager);
+					wornAmmoExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, priced.price)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED, priced.basis));
+					log.debug("Consumed equipped ammo/jewelry on tick: {} x{} @ {} gp = {} gp", itemName, quantity, priced.price, (long) quantity * priced.price);
 					plugin.removeRecentlyUnequipped(itemId, quantity);
 				}
 				plugin.pendingWornAmmoExpenses.clear();
@@ -181,7 +182,9 @@ final class GameTickProcessor
 					Map<Integer, CoinFlowSession.TrackedItem> wearExpenses = new HashMap<>();
 					wearExpenses.put(com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID,
 						new CoinFlowSession.TrackedItem(com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID,
-							com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_NAME, wearGp, 1L));
+							com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_NAME, wearGp, 1L)
+							.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+								CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 					log.debug("Barrows wear charged on tick: {} gp", wearGp);
 					plugin.processGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), wearExpenses);
 				}
@@ -235,9 +238,10 @@ final class GameTickProcessor
 				int itemId = entry.getKey();
 				int quantity = entry.getValue();
 				String itemName = plugin.getItemName(itemId);
-				long price = ItemPricing.priceOf(itemId, plugin.itemManager);
-				chargeExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-				log.debug("Consumed weapon charge resource on tick: {} x{} @ {} gp", itemName, quantity, price);
+				ItemPricing.Priced priced = ItemPricing.priced(itemId, plugin.itemManager);
+				chargeExpenses.put(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, priced.price)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.WEAPON_CHARGE, priced.basis));
+				log.debug("Consumed weapon charge resource on tick: {} x{} @ {} gp", itemName, quantity, priced.price);
 			}
 			plugin.processGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), chargeExpenses);
 		}
@@ -368,14 +372,18 @@ final class GameTickProcessor
 		{
 			expenses.put(BlastFurnaceTracker.COFFER_ROW_ID,
 				new CoinFlowSession.TrackedItem(BlastFurnaceTracker.COFFER_ROW_ID,
-					BlastFurnaceTracker.COFFER_ROW_NAME, settle.drainChargeGp, 1L));
+					BlastFurnaceTracker.COFFER_ROW_NAME, settle.drainChargeGp, 1L)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+						CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 			log.debug("Blast Furnace coffer drain charged: {} gp", settle.drainChargeGp);
 		}
 		if (settle.cashSpendCoins > 0)
 		{
 			String coinsName = plugin.getItemName(ItemID.COINS);
 			expenses.put(ItemID.COINS,
-				new CoinFlowSession.TrackedItem(ItemID.COINS, coinsName, settle.cashSpendCoins, 1L));
+				new CoinFlowSession.TrackedItem(ItemID.COINS, coinsName, settle.cashSpendCoins, 1L)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.CASH_SPEND,
+						CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 			// Like the cash-spend path in ConsumablesAndDropsHandler: retire
 			// matching session coin gains so pre-session coins dropped later
 			// cannot deduct the already-spent loot a second time.

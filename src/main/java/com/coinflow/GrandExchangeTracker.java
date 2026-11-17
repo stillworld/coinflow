@@ -255,7 +255,8 @@ public final class GrandExchangeTracker
 		boolean untrackedAsIncome)
 	{
 		return settle(itemId, quantity, grossProceeds,
-			GrandExchangeTax.netProceeds(itemId, quantity, grossProceeds), session, untrackedAsIncome);
+			GrandExchangeTax.netProceeds(itemId, quantity, grossProceeds), session, untrackedAsIncome,
+			CoinFlowSession.TrackedItem.Reason.GE_SALE);
 	}
 
 	/**
@@ -269,11 +270,12 @@ public final class GrandExchangeTracker
 	GeLedger settleShopSell(int itemId, int quantity, long proceeds, CoinFlowSession session,
 		boolean untrackedAsIncome)
 	{
-		return settle(itemId, quantity, proceeds, proceeds, session, untrackedAsIncome);
+		return settle(itemId, quantity, proceeds, proceeds, session, untrackedAsIncome,
+			CoinFlowSession.TrackedItem.Reason.SHOP_SALE);
 	}
 
 	private GeLedger settle(int itemId, int quantity, long grossProceeds, long netProceeds,
-		CoinFlowSession session, boolean untrackedAsIncome)
+		CoinFlowSession session, boolean untrackedAsIncome, CoinFlowSession.TrackedItem.Reason saleReason)
 	{
 		GeLedger ledger = new GeLedger();
 		if (quantity <= 0)
@@ -314,17 +316,17 @@ public final class GrandExchangeTracker
 			ledger.netDelta += residual;
 			if (residual > 0)
 			{
-				addCoinGain(ledger, residual);
+				addCoinGain(ledger, residual, saleReason);
 			}
 			else if (residual < 0)
 			{
-				addCoinExpense(ledger, -residual);
+				addCoinExpense(ledger, -residual, saleReason);
 			}
 		}
 
 		if (trackedQty > 0)
 		{
-			addCoinGain(ledger, pTracked);
+			addCoinGain(ledger, pTracked, saleReason);
 			ledger.deductions.put(itemId,
 				new CoinFlowSession.TrackedItem(itemId, tracked.getName(), trackedQty, tracked.getPriceEach()));
 			long carried = tracked.getRemainingQuantity() > 0
@@ -343,12 +345,14 @@ public final class GrandExchangeTracker
 			if (residual < 0)
 			{
 				ledger.expenses.merge(GrandExchangeTax.TAX_ITEM_ID,
-					new CoinFlowSession.TrackedItem(GrandExchangeTax.TAX_ITEM_ID, GrandExchangeTax.TAX_ITEM_NAME, clampQty(-residual), 1L),
+					new CoinFlowSession.TrackedItem(GrandExchangeTax.TAX_ITEM_ID, GrandExchangeTax.TAX_ITEM_NAME, clampQty(-residual), 1L)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+							CoinFlowSession.TrackedItem.PriceBasis.FIXED),
 					(a, b) -> a.merge(b));
 			}
 			else if (residual > 0)
 			{
-				addCoinGain(ledger, residual);
+				addCoinGain(ledger, residual, saleReason);
 			}
 		}
 
@@ -395,8 +399,23 @@ public final class GrandExchangeTracker
 
 			long total = basis[1] + (long) (qty - basisQty) * item.getPriceEach();
 			long priceEach = (total + qty / 2) / qty;
-			result.put(entry.getKey(),
-				new CoinFlowSession.TrackedItem(item.getItemId(), item.getName(), qty, priceEach));
+			CoinFlowSession.TrackedItem repriced =
+				new CoinFlowSession.TrackedItem(item.getItemId(), item.getName(), qty, priceEach)
+					.withProvenance(null, CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST);
+			for (CoinFlowSession.TrackedItem.Reason reason : item.getReasons())
+			{
+				repriced = repriced.withProvenance(reason, null);
+			}
+			// A partially covered lot is a mix of purchase cost and the
+			// original pricing source; a fully covered one is all cost.
+			if (basisQty != qty)
+			{
+				for (CoinFlowSession.TrackedItem.PriceBasis b : item.getPriceBases())
+				{
+					repriced = repriced.withProvenance(null, b);
+				}
+			}
+			result.put(entry.getKey(), repriced);
 
 			log.debug("Repriced supply from basis: {} x{} ({} from basis @ {} gp total) -> {} gp each",
 				item.getName(), qty, basisQty, basis[1], priceEach);
@@ -766,17 +785,19 @@ public final class GrandExchangeTracker
 		return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, amount));
 	}
 
-	private static void addCoinGain(GeLedger ledger, long amount)
+	private static void addCoinGain(GeLedger ledger, long amount, CoinFlowSession.TrackedItem.Reason reason)
 	{
 		ledger.gains.merge(ItemID.COINS,
-			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L),
+			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L)
+				.withProvenance(reason, CoinFlowSession.TrackedItem.PriceBasis.FIXED),
 			(a, b) -> a.merge(b));
 	}
 
-	private static void addCoinExpense(GeLedger ledger, long amount)
+	private static void addCoinExpense(GeLedger ledger, long amount, CoinFlowSession.TrackedItem.Reason reason)
 	{
 		ledger.expenses.merge(ItemID.COINS,
-			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L),
+			new CoinFlowSession.TrackedItem(ItemID.COINS, "Coins", Math.max(0L, amount), 1L)
+				.withProvenance(reason, CoinFlowSession.TrackedItem.PriceBasis.FIXED),
 			(a, b) -> a.merge(b));
 	}
 }

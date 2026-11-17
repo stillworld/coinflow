@@ -96,9 +96,19 @@ public class FoodPortionHandler implements ReconciliationHandler
 				String expenseName = lostName + " (portion)";
 				if (!context.isIgnored(lostName) && !context.isIgnored(expenseName))
 				{
-					context.addFractionalSupplyExpense(canonicalLostId,
+					CoinFlowSession.TrackedItem.PriceBasis portionBasis = wholePrice > 0
+						? CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE
+						: CoinFlowSession.TrackedItem.PriceBasis.UNPRICED;
+					CoinFlowSession.TrackedItem portionExpense =
 						new CoinFlowSession.TrackedItem(canonicalLostId, expenseName, portions,
-							expenseTotal / portions));
+							expenseTotal / portions)
+							.withProvenance(CoinFlowSession.TrackedItem.Reason.DOSE, portionBasis);
+					if (basisCost > 0)
+					{
+						portionExpense = portionExpense.withProvenance(null,
+							CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST);
+					}
+					context.addFractionalSupplyExpense(canonicalLostId, portionExpense);
 					log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 						expenseName, portions, expenseTotal / portions, expenseTotal);
 				}

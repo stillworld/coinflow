@@ -84,6 +84,15 @@ public class ReconciliationContext
 	private final java.util.Set<Integer> exemptProductIds = new java.util.HashSet<>();
 
 	/**
+	 * Canonical item ids among {@link #rawGains} that should book under a
+	 * reason other than the default {@code GAINED} — e.g. a smithing output or
+	 * alchemy coins. Consumed by {@code SessionApplier}; entries for ids absent
+	 * from the final gains map are ignored.
+	 */
+	@Getter
+	private final Map<Integer, CoinFlowSession.TrackedItem.Reason> gainReasons = new HashMap<>();
+
+	/**
 	 * Item ids whose supply expense this tick is denominated in sub-units
 	 * (potion doses, food portions) rather than whole items. These must not be
 	 * repriced against whole-item cost basis.
@@ -290,6 +299,15 @@ public class ReconciliationContext
 	public boolean isExemptProduct(int itemId)
 	{
 		return exemptProductIds.contains(itemId);
+	}
+
+	/**
+	 * Tags a raw gain with the reason it was produced, for the row-provenance
+	 * tooltip. Last tag wins if two handlers claim the same id.
+	 */
+	public void tagGain(int itemId, CoinFlowSession.TrackedItem.Reason reason)
+	{
+		gainReasons.put(itemId, reason);
 	}
 
 	public ReconciliationContext(

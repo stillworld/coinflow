@@ -49,13 +49,14 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 			// losses (quest hand-ins, Destroy, death) keep the legacy path.
 			if (context.isDropsAsSpent() && context.isDropIntent(itemId))
 			{
-				long price = ItemPricing.priceOf(itemId, itemManager);
-				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				ItemPricing.Priced dropPriced = ItemPricing.priced(itemId, itemManager);
+				context.addDropExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, dropPriced.price)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.DROPPED, dropPriced.basis));
 				context.getRecentlyExpensedDrops().merge(itemId, quantity, Integer::sum);
 				context.retireSessionGain(itemId, quantity);
 
 				log.debug("Dropped item expensed: {} x{} @ {} gp = {} gp",
-					itemName, quantity, price, (long) quantity * price);
+					itemName, quantity, dropPriced.price, (long) quantity * dropPriced.price);
 				continue;
 			}
 
@@ -84,7 +85,9 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				if (cashQty > 0)
 				{
 					long price = itemId == ItemID.PLATINUM ? 1000L : 1L;
-					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, cashQty, price));
+					context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, cashQty, price)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.CASH_SPEND,
+							CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 					context.retireSessionGain(itemId, cashQty);
 					log.debug("Cash spend: {} x{} = {} gp", itemName, cashQty, cashQty * price);
 				}
@@ -111,10 +114,11 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 
 			if (isConsumable)
 			{
-				long price = ItemPricing.priceOf(itemId, itemManager);
+				ItemPricing.Priced priced = ItemPricing.priced(itemId, itemManager);
 
 				CoinFlowSession.TrackedItem expenseItem =
-					new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
+					new CoinFlowSession.TrackedItem(itemId, itemName, quantity, priced.price)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED, priced.basis);
 				context.addSupplyExpense(itemId, expenseItem);
 
 				// Retire matching session gains so a later drop/sale of pre-session
@@ -122,18 +126,19 @@ public class ConsumablesAndDropsHandler implements ReconciliationHandler
 				context.retireSessionGain(itemId, quantity);
 
 				log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
-					itemName, quantity, price, (long) quantity * price);
+					itemName, quantity, priced.price, (long) quantity * priced.price);
 			}
 			else if (context.isCargoHoldLoss())
 			{
 				// Items can only leave the boat's cargo hold by being consumed
 				// (landing-site/facility builds, ship-cannon shots) — there is
 				// no drop path out of the hold, so expense them like supplies.
-				long price = ItemPricing.priceOf(itemId, itemManager);
-				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
+				ItemPricing.Priced cargoPriced = ItemPricing.priced(itemId, itemManager);
+				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, cargoPriced.price)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED, cargoPriced.basis));
 				context.retireSessionGain(itemId, quantity);
 				log.debug("Consumed from boat cargo hold: {} x{} @ {} gp = {} gp",
-					itemName, quantity, price, (long) quantity * price);
+					itemName, quantity, cargoPriced.price, (long) quantity * cargoPriced.price);
 			}
 			else
 			{

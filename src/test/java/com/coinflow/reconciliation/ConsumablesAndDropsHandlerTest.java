@@ -285,4 +285,50 @@ public class ConsumablesAndDropsHandlerTest
 		Assert.assertEquals("Absorbed fee still retires matching session coin gains",
 			Long.valueOf(4000), context.getConsumedSessionQuantities().get(ItemID.COINS));
 	}
+
+	// ── Row provenance ────────────────────────────────────────────────
+
+	@Test
+	public void cashSpend_provenance()
+	{
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(ItemID.COINS, 12758);
+
+		ReconciliationContext context = context(new HashMap<>(), losses);
+		handler.reconcile(context);
+
+		CoinFlowSession.TrackedItem expense = context.getSupplyExpenses().get(ItemID.COINS);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.CASH_SPEND),
+			expense.getReasons());
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.FIXED),
+			expense.getPriceBases());
+	}
+
+	@Test
+	public void consumedFood_provenance()
+	{
+		int sharkId = 385;
+		ItemComposition sharkComp = mock(ItemComposition.class);
+		lenient().when(sharkComp.getName()).thenReturn("Shark");
+		lenient().when(sharkComp.getInventoryActions()).thenReturn(new String[]{"Eat"});
+		lenient().when(itemManager.getItemComposition(sharkId)).thenReturn(sharkComp);
+		lenient().when(itemManager.getItemPrice(sharkId)).thenReturn(900L);
+
+		Map<Integer, Integer> losses = new HashMap<>();
+		losses.put(sharkId, 1);
+
+		ReconciliationContext context = context(new HashMap<>(), losses);
+		handler.reconcile(context);
+
+		CoinFlowSession.TrackedItem expense = context.getSupplyExpenses().get(sharkId);
+		Assert.assertNotNull(expense);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.CONSUMED),
+			expense.getReasons());
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE),
+			expense.getPriceBases());
+	}
 }

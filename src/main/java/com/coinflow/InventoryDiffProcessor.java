@@ -410,7 +410,7 @@ final class InventoryDiffProcessor
 				if (!omnishopGains.isEmpty())
 				{
 					log.debug("Omnishop purchase credited: {}", omnishopGains);
-					plugin.processGains(omnishopGains);
+					plugin.processGains(omnishopGains, CoinFlowSession.TrackedItem.Reason.POINTS_SHOP);
 				}
 			}
 			plugin.previousInventorySnapshot = currentSnapshot;
@@ -524,7 +524,7 @@ final class InventoryDiffProcessor
 					if (!lateGains.isEmpty())
 					{
 						log.debug("Late omnishop purchase credited: {}", lateGains);
-						plugin.processGains(lateGains);
+						plugin.processGains(lateGains, CoinFlowSession.TrackedItem.Reason.POINTS_SHOP);
 					}
 				}
 				// A purchase landing inside a re-baseline window (e.g. Zaff's
@@ -979,9 +979,10 @@ final class InventoryDiffProcessor
 				int itemId = entry.getKey();
 				int quantity = entry.getValue();
 				String itemName = plugin.getItemName(itemId);
-				long price = ItemPricing.priceOf(itemId, plugin.itemManager);
-				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price));
-				log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, price, (long) quantity * price);
+				ItemPricing.Priced priced = ItemPricing.priced(itemId, plugin.itemManager);
+				context.addSupplyExpense(itemId, new CoinFlowSession.TrackedItem(itemId, itemName, quantity, priced.price)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED, priced.basis));
+				log.debug("Consumed equipped ammo/jewelry: {} x{} @ {} gp = {} gp", itemName, quantity, priced.price, (long) quantity * priced.price);
 				plugin.removeRecentlyUnequipped(itemId, quantity);
 			}
 			plugin.pendingWornAmmoExpenses.clear();
@@ -1023,7 +1024,8 @@ final class InventoryDiffProcessor
 				context.getSupplyExpenses(),
 				context.getAlchedDropItemId(),
 				context.getExemptProductIds(),
-				context.getBasisExcludedExpenseIds()
+				context.getBasisExcludedExpenseIds(),
+				context.getGainReasons()
 			);
 
 			if (context.getActiveSkillingSkills().contains(Skill.FIREMAKING))
@@ -1185,7 +1187,9 @@ final class InventoryDiffProcessor
 				Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
 				expenses.put(InventorySnapshotService.CARGO_LOSS_ROW_ID,
 					new CoinFlowSession.TrackedItem(InventorySnapshotService.CARGO_LOSS_ROW_ID,
-						InventorySnapshotService.CARGO_LOSS_ROW_NAME, totalValue, 1L));
+						InventorySnapshotService.CARGO_LOSS_ROW_NAME, totalValue, 1L)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+							CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 				plugin.session = plugin.session.withGainsLossesAndExpenses(
 					Collections.emptyMap(), Collections.emptyMap(), expenses);
 				log.debug("Boat cargo lost: {} gp across {} item types", totalValue, consumed.size());

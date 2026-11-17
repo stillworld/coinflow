@@ -126,6 +126,8 @@ public class ProcessingHandler implements ReconciliationHandler
 				}
 				else
 				{
+					context.tagGain(canonicalGainedId,
+						CoinFlowSession.TrackedItem.Reason.PROCESSING_OUTPUT);
 					int satisfiedGained = primaryNeeded == primaryToConsume
 						? gainedQty
 						: Math.max(1, (int) Math.floor((double) primaryToConsume * gainedQty / primaryNeeded));
@@ -321,14 +323,14 @@ public class ProcessingHandler implements ReconciliationHandler
 		int remainingSupplyQty = quantity - deductibleQty;
 		if (remainingSupplyQty > 0)
 		{
-			long price = ItemPricing.priceOf(itemId, itemManager);
+			ItemPricing.Priced priced = ItemPricing.priced(itemId, itemManager);
 			CoinFlowSession.TrackedItem expenseItem = new CoinFlowSession.TrackedItem(
-				itemId, itemName, remainingSupplyQty, price
-			);
+				itemId, itemName, remainingSupplyQty, priced.price
+			).withProvenance(CoinFlowSession.TrackedItem.Reason.PROCESSING_INPUT, priced.basis);
 			context.addSupplyExpense(itemId, expenseItem);
 
 			log.debug("Processing ingredient consumed: {} x{} @ {} gp = {} gp",
-				itemName, remainingSupplyQty, price, (long) remainingSupplyQty * price);
+				itemName, remainingSupplyQty, priced.price, (long) remainingSupplyQty * priced.price);
 		}
 	}
 }

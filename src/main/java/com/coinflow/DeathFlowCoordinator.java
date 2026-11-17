@@ -168,7 +168,9 @@ final class DeathFlowCoordinator
 
 		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
 		expenses.put(DeathTracker.DEATH_ROW_ID,
-			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, totalValue, 1L));
+			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, totalValue, 1L)
+				.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+					CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 		plugin.session = plugin.session.withGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), expenses);
 
 		// Lost session gains can no longer be deducted a second time.
@@ -273,7 +275,9 @@ final class DeathFlowCoordinator
 		}
 		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
 		expenses.put(DeathTracker.DEATH_ROW_ID,
-			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, fee, 1L));
+			new CoinFlowSession.TrackedItem(DeathTracker.DEATH_ROW_ID, DeathTracker.DEATH_ROW_NAME, fee, 1L)
+				.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+					CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 		plugin.session = plugin.session.withGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), expenses);
 		log.debug("Death reclaim fee: {} gp", fee);
 	}

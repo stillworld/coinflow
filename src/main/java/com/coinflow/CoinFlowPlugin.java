@@ -1330,6 +1330,15 @@ public class CoinFlowPlugin extends Plugin
 	}
 
 	/**
+	 * {@link #processGains(Map)} with an explicit booking reason for the
+	 * row-provenance tooltip (e.g. points-shop purchase).
+	 */
+	void processGains(Map<Integer, Integer> rawGains, CoinFlowSession.TrackedItem.Reason gainReason)
+	{
+		sessionApplier.processGains(rawGains, gainReason);
+	}
+
+	/**
 	 * Processes raw item gains and supply expenses atomically:
 	 * looks up prices, updates the session, and triggers gold drops for positive gains.
 	 */
@@ -1388,6 +1397,19 @@ public class CoinFlowPlugin extends Plugin
 	{
 		sessionApplier.processGainsLossesAndExpenses(rawGains, droppedGainsDeductions, supplyExpenses, alchedDropItemId,
 			exemptProductIds, fractionalExpenseIds);
+	}
+
+	void processGainsLossesAndExpenses(
+		Map<Integer, Integer> rawGains,
+		Map<Integer, CoinFlowSession.TrackedItem> droppedGainsDeductions,
+		Map<Integer, CoinFlowSession.TrackedItem> supplyExpenses,
+		int alchedDropItemId,
+		Set<Integer> exemptProductIds,
+		Set<Integer> fractionalExpenseIds,
+		Map<Integer, CoinFlowSession.TrackedItem.Reason> gainReasons)
+	{
+		sessionApplier.processGainsLossesAndExpenses(rawGains, droppedGainsDeductions, supplyExpenses, alchedDropItemId,
+			exemptProductIds, fractionalExpenseIds, gainReasons);
 	}
 
 	/**
