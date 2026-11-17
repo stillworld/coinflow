@@ -849,4 +849,124 @@ public class CoinFlowSessionTest
 		Assert.assertEquals(session.isIdle(), after.isIdle());
 		Assert.assertEquals(session.getLastTickTime(), after.getLastTickTime());
 	}
+
+	// ── Row provenance (tooltip data) ───────────────────────────────────
+
+	private static CoinFlowSession.TrackedItem tagged(
+		int id, String name, long qty, long price,
+		CoinFlowSession.TrackedItem.Reason reason,
+		CoinFlowSession.TrackedItem.PriceBasis basis)
+	{
+		return new CoinFlowSession.TrackedItem(id, name, qty, price).withProvenance(reason, basis);
+	}
+
+	@Test
+	public void trackedItem_defaultsToNoProvenance()
+	{
+		CoinFlowSession.TrackedItem item = new CoinFlowSession.TrackedItem(1, "Coal", 10, 150L);
+		Assert.assertTrue(item.getReasons().isEmpty());
+		Assert.assertTrue(item.getPriceBases().isEmpty());
+	}
+
+	@Test
+	public void withProvenance_accumulatesTags()
+	{
+		CoinFlowSession.TrackedItem item = new CoinFlowSession.TrackedItem(1, "Shark", 2, 1_000L)
+			.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED,
+				CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE)
+			.withProvenance(null, CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST);
+
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.CONSUMED), item.getReasons());
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE,
+				CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST),
+			item.getPriceBases());
+	}
+
+	@Test
+	public void merge_unionsProvenance()
+	{
+		CoinFlowSession.TrackedItem a = tagged(1, "Coal", 5, 150L,
+			CoinFlowSession.TrackedItem.Reason.GAINED,
+			CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE);
+		CoinFlowSession.TrackedItem b = tagged(1, "Coal", 3, 150L,
+			CoinFlowSession.TrackedItem.Reason.POINTS_SHOP,
+			CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE);
+
+		CoinFlowSession.TrackedItem merged = a.merge(b);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.GAINED,
+				CoinFlowSession.TrackedItem.Reason.POINTS_SHOP),
+			merged.getReasons());
+	}
+
+	@Test
+	public void copyMethods_preserveProvenance()
+	{
+		CoinFlowSession.TrackedItem item = tagged(1, "Shark", 10, 1_000L,
+			CoinFlowSession.TrackedItem.Reason.GAINED,
+			CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE);
+
+		java.util.Set<CoinFlowSession.TrackedItem> copies = new java.util.HashSet<>();
+		copies.add(item.withQuantity(3));
+		copies.add(item.withAdditionalQuantity(2));
+		copies.add(item.withDeduction(4));
+		copies.add(item.withConsumption(2));
+		copies.add(item.withConsumption(2).withRestoredConsumption(1));
+
+		for (CoinFlowSession.TrackedItem copy : copies)
+		{
+			Assert.assertEquals(item.getReasons(), copy.getReasons());
+			Assert.assertEquals(item.getPriceBases(), copy.getPriceBases());
+		}
+	}
+
+	@Test
+	public void markConsumed_andExpenseReversal_preserveProvenance()
+	{
+		java.util.Map<Integer, CoinFlowSession.TrackedItem> expenses = new java.util.HashMap<>();
+		expenses.put(1, tagged(1, "Coal", 10, 150L,
+			CoinFlowSession.TrackedItem.Reason.DROPPED,
+			CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE));
+
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(java.util.Collections.singletonMap(1,
+				tagged(1, "Coal", 10, 150L,
+					CoinFlowSession.TrackedItem.Reason.GAINED,
+					CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE)))
+			.withExpenses(expenses);
+
+		session = session.markConsumed(Collections.singletonMap(1, 4L))
+			.withExpenseReversal(Collections.singletonMap(1, 4L));
+
+		CoinFlowSession.TrackedItem expense = session.getTrackedExpenses().get(1);
+		Assert.assertEquals(java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.DROPPED),
+			expense.getReasons());
+		// The restored-consumption gain also keeps its provenance.
+		Assert.assertEquals(java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.GAINED),
+			session.getTrackedItems().get(1).getReasons());
+	}
+
+	@Test
+	public void equals_ignoresProvenance()
+	{
+		// TrackedItem equality gates the panel's row rebuild; provenance is
+		// excluded so a tag-only difference doesn't rebuild rows.
+		CoinFlowSession.TrackedItem plain = new CoinFlowSession.TrackedItem(1, "Coal", 10, 150L);
+		CoinFlowSession.TrackedItem tagged = tagged(1, "Coal", 10, 150L,
+			CoinFlowSession.TrackedItem.Reason.GAINED,
+			CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE);
+		Assert.assertEquals(plain, tagged);
+		Assert.assertEquals(plain.hashCode(), tagged.hashCode());
+	}
+
+	@Test
+	public void equals_includesRemaining()
+	{
+		// Remaining fields feed the tooltip's "Still held" line; a
+		// consumption-only change must still trigger a row rebuild.
+		CoinFlowSession.TrackedItem item = new CoinFlowSession.TrackedItem(1, "Shark", 10, 1_000L);
+		Assert.assertNotEquals(item, item.withConsumption(3));
+	}
 }

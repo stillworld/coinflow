@@ -153,6 +153,8 @@ public class ItemNotingHandler implements ReconciliationHandler
 					context.addSupplyExpense(
 						ItemID.COINS,
 						new CoinFlowSession.TrackedItem(ItemID.COINS, coinsName, feeDeducted, 1L)
+							.withProvenance(CoinFlowSession.TrackedItem.Reason.CASH_SPEND,
+								CoinFlowSession.TrackedItem.PriceBasis.FIXED)
 					);
 					log.debug("Attributed noting/unnoting fee: {} gp", feeDeducted);
 

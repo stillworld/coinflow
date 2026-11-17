@@ -830,4 +830,92 @@ public class GrandExchangeTrackerTest
 
 		Assert.assertEquals(0, tracker.basisQuantity(DHAROK_BODY));
 	}
+
+	// ── Row provenance ────────────────────────────────────────────────
+
+	private static Map<Integer, CoinFlowSession.TrackedItem> taggedExpense(
+		int itemId, int qty, long priceEach)
+	{
+		Map<Integer, CoinFlowSession.TrackedItem> m = new java.util.HashMap<>();
+		m.put(itemId, new CoinFlowSession.TrackedItem(itemId, "Shark", qty, priceEach)
+			.withProvenance(CoinFlowSession.TrackedItem.Reason.CONSUMED,
+				CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE));
+		return m;
+	}
+
+	@Test
+	public void repriceFromBasis_fullCoverage_basisBecomesPurchaseCost()
+	{
+		tracker.addBasis(SHARK, 10, 12000);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(
+			taggedExpense(SHARK, 10, 1000), Collections.<Integer>emptySet());
+
+		CoinFlowSession.TrackedItem row = out.get(SHARK);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST),
+			row.getPriceBases());
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.CONSUMED),
+			row.getReasons());
+	}
+
+	@Test
+	public void repriceFromBasis_partialCoverage_basisIsMixed()
+	{
+		tracker.addBasis(SHARK, 4, 4800);
+
+		Map<Integer, CoinFlowSession.TrackedItem> out = tracker.repriceFromBasis(
+			taggedExpense(SHARK, 10, 1000), Collections.<Integer>emptySet());
+
+		CoinFlowSession.TrackedItem row = out.get(SHARK);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST,
+				CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE),
+			row.getPriceBases());
+	}
+
+	@Test
+	public void settleSell_coinGains_taggedGeSale()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(HELM, "Dragon med helm", 1, 59000));
+
+		GrandExchangeTracker.GeLedger ledger = tracker.settleSell(HELM, 1, 59000, session);
+
+		CoinFlowSession.TrackedItem coin = coins(ledger.gains);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.GE_SALE),
+			coin.getReasons());
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.PriceBasis.FIXED),
+			coin.getPriceBases());
+	}
+
+	@Test
+	public void settleShopSell_coinGains_taggedShopSale()
+	{
+		CoinFlowSession session = CoinFlowSession.createNew()
+			.withGains(gains(HELM, "Dragon med helm", 1, 59000));
+
+		GrandExchangeTracker.GeLedger ledger = tracker.settleShopSell(
+			HELM, 1, 50000, session, false);
+
+		CoinFlowSession.TrackedItem coin = coins(ledger.gains);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.SHOP_SALE),
+			coin.getReasons());
+	}
+
+	@Test
+	public void settleSell_geTaxRow_taggedSynthetic()
+	{
+		GrandExchangeTracker.GeLedger ledger = tracker.settleSell(
+			HELM, 1, 59000, CoinFlowSession.createNew());
+
+		CoinFlowSession.TrackedItem taxRow = tax(ledger.expenses);
+		Assert.assertEquals(
+			java.util.EnumSet.of(CoinFlowSession.TrackedItem.Reason.SYNTHETIC),
+			taxRow.getReasons());
+	}
 }

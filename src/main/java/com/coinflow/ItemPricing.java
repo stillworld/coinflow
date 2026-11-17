@@ -66,33 +66,58 @@ public final class ItemPricing
 	}
 
 	/**
+	 * Realizable value of one item plus which fallback priced it — for the
+	 * row-provenance tooltip.
+	 */
+	public static final class Priced
+	{
+		public final long price;
+		public final CoinFlowSession.TrackedItem.PriceBasis basis;
+
+		Priced(long price, CoinFlowSession.TrackedItem.PriceBasis basis)
+		{
+			this.price = price;
+			this.basis = basis;
+		}
+	}
+
+	/**
 	 * Realizable value of one item: GE price, fixed coin/platinum values, then
 	 * high alchemy — or 0 for items that can never be converted to cash.
 	 */
 	public static long priceOf(int itemId, ItemManager itemManager)
 	{
-		if (itemId == ItemID.COINS)
+		return priced(itemId, itemManager).price;
+	}
+
+	/**
+	 * {@link #priceOf} plus the {@link CoinFlowSession.TrackedItem.PriceBasis}
+	 * describing which branch produced the value.
+	 */
+	public static Priced priced(int itemId, ItemManager itemManager)
+	{
+		if (itemId == ItemID.COINS || itemId == ItemID.PLATINUM)
 		{
-			return 1;
-		}
-		if (itemId == ItemID.PLATINUM)
-		{
-			return 1000;
+			return new Priced(itemId == ItemID.PLATINUM ? 1000 : 1,
+				CoinFlowSession.TrackedItem.PriceBasis.FIXED);
 		}
 		if (itemManager == null)
 		{
-			return 0;
+			return new Priced(0, CoinFlowSession.TrackedItem.PriceBasis.UNPRICED);
 		}
 		long price = itemManager.getItemPrice(itemId);
 		if (price > 0)
 		{
-			return price;
+			return new Priced(price, CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE);
 		}
 		if (UNALCHABLE_UNTRADEABLES.contains(itemManager.canonicalize(itemId)))
 		{
-			return 0;
+			return new Priced(0, CoinFlowSession.TrackedItem.PriceBasis.UNPRICED);
 		}
 		ItemComposition comp = itemManager.getItemComposition(itemId);
-		return comp != null ? comp.getHaPrice() : 0;
+		long ha = comp != null ? comp.getHaPrice() : 0;
+		return new Priced(ha, ha > 0
+			? CoinFlowSession.TrackedItem.PriceBasis.HIGH_ALCH
+			: CoinFlowSession.TrackedItem.PriceBasis.UNPRICED);
 	}
 }

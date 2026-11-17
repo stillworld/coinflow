@@ -1794,16 +1794,7 @@ public class CoinFlowPanel extends PluginPanel
 		row.add(valueLabel, BorderLayout.EAST);
 
 		// Tooltip
-		String tooltipType = isExpense ? "Expense (supply consumed)" : "Loot / Gain";
-		String tooltip = String.format(
-			"<html><b>%s</b> <i>(%s)</i><br>Quantity: %s<br>Price each: %s gp<br>Total: %s%s gp</html>",
-			item.getName(),
-			tooltipType,
-			QuantityFormatter.formatNumber(item.getQuantity()),
-			QuantityFormatter.formatNumber(item.getPriceEach()),
-			sign,
-			QuantityFormatter.formatNumber(item.getTotalValue())
-		);
+		String tooltip = itemTooltip(item, isExpense);
 		row.setToolTipText(tooltip);
 		iconLabel.setToolTipText(tooltip);
 		nameLabel.setToolTipText(tooltip);
@@ -1839,6 +1830,102 @@ public class CoinFlowPanel extends PluginPanel
 		textPanel.setComponentPopupMenu(popup);
 
 		return row;
+	}
+
+	/**
+	 * Builds the row tooltip: quantity/price/total plus provenance — why the
+	 * row booked (reasons), how it was priced (basis), and how much of a gain
+	 * is still held.
+	 */
+	static String itemTooltip(CoinFlowSession.TrackedItem item, boolean isExpense)
+	{
+		String sign = isExpense ? "-" : "+";
+		String tooltipType = isExpense ? "Expense (supply consumed)" : "Loot / Gain";
+		StringBuilder html = new StringBuilder("<html><body style='width:230px'>")
+			.append("<b>").append(item.getName()).append("</b> <i>(").append(tooltipType).append(")</i><br>")
+			.append("Quantity: ").append(QuantityFormatter.formatNumber(item.getQuantity())).append("<br>")
+			.append("Price each: ").append(QuantityFormatter.formatNumber(item.getPriceEach())).append(" gp<br>")
+			.append("Total: ").append(sign).append(QuantityFormatter.formatNumber(item.getTotalValue())).append(" gp");
+
+		if (!item.getReasons().isEmpty())
+		{
+			StringBuilder reasons = new StringBuilder();
+			for (CoinFlowSession.TrackedItem.Reason reason : item.getReasons())
+			{
+				if (reasons.length() > 0)
+				{
+					reasons.append(", ");
+				}
+				reasons.append(reason.label(isExpense));
+			}
+			html.append("<br>Booked as: ").append(reasons);
+		}
+
+		if (!item.getPriceBases().isEmpty())
+		{
+			StringBuilder bases = new StringBuilder();
+			for (CoinFlowSession.TrackedItem.PriceBasis basis : item.getPriceBases())
+			{
+				if (bases.length() > 0)
+				{
+					bases.append(", ");
+				}
+				bases.append(basis.label());
+			}
+			if (item.getPriceBases().size() > 1)
+			{
+				bases.append(" (mixed)");
+			}
+			html.append("<br>Priced by: ").append(bases);
+		}
+
+		if (!isExpense && item.getRemainingQuantity() < item.getQuantity())
+		{
+			html.append("<br>Still held: ")
+				.append(QuantityFormatter.formatNumber(item.getRemainingQuantity()))
+				.append(" of ")
+				.append(QuantityFormatter.formatNumber(item.getQuantity()));
+		}
+
+		String explanation = item.getReasons().contains(CoinFlowSession.TrackedItem.Reason.SYNTHETIC)
+			? syntheticExplanation(item.getItemId())
+			: null;
+		if (explanation != null)
+		{
+			html.append("<br><i>").append(explanation).append("</i>");
+		}
+
+		html.append("</body></html>");
+		return html.toString();
+	}
+
+	/**
+	 * One-line explanation for synthetic bookkeeping rows, keyed by the row's
+	 * backing item id. Null for ordinary items.
+	 */
+	static String syntheticExplanation(int itemId)
+	{
+		if (itemId == DeathTracker.DEATH_ROW_ID)
+		{
+			return "Value of items lost on death; reclaims reverse it.";
+		}
+		if (itemId == GrandExchangeTax.TAX_ITEM_ID)
+		{
+			return "GE tax on sales of untracked stock.";
+		}
+		if (itemId == BlastFurnaceTracker.COFFER_ROW_ID)
+		{
+			return "Coffer drain at 12 gp/tick while at the furnace.";
+		}
+		if (itemId == com.coinflow.reconciliation.BarrowsWear.WEAR_ROW_ID)
+		{
+			return "Barrows degradation; repair fees are absorbed up to booked wear.";
+		}
+		if (itemId == InventorySnapshotService.CARGO_LOSS_ROW_ID)
+		{
+			return "Cargo lost with a destroyed boat.";
+		}
+		return null;
 	}
 
 	/**

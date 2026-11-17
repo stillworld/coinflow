@@ -170,6 +170,8 @@ public class BlastFurnaceHandler implements ReconciliationHandler
 				continue;
 			}
 
+			context.tagGain(barId, CoinFlowSession.TrackedItem.Reason.PROCESSING_OUTPUT);
+
 			for (Map.Entry<Integer, Integer> input : recipe.entrySet())
 			{
 				int inputId = input.getKey();
@@ -180,9 +182,10 @@ public class BlastFurnaceHandler implements ReconciliationHandler
 					continue;
 				}
 
-				long price = ItemPricing.priceOf(inputId, itemManager);
+				ItemPricing.Priced priced = ItemPricing.priced(inputId, itemManager);
 				context.addSupplyExpense(inputId,
-					new CoinFlowSession.TrackedItem(inputId, inputName, inputQty, price));
+					new CoinFlowSession.TrackedItem(inputId, inputName, inputQty, priced.price)
+						.withProvenance(CoinFlowSession.TrackedItem.Reason.PROCESSING_INPUT, priced.basis));
 			}
 			log.debug("Blast Furnace bars collected: {} x{} -> recipe inputs expensed", barName, barQty);
 		}

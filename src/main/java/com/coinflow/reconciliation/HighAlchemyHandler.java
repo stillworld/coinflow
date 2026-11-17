@@ -154,15 +154,20 @@ public class HighAlchemyHandler implements ReconciliationHandler
 			int bankedQty = alchedQty - sessionDeductibleQty;
 			if (bankedQty > 0)
 			{
+				CoinFlowSession.TrackedItem.PriceBasis alchBasis =
+					itemManager.getItemPrice(canonicalLostId) > 0
+						? CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE
+						: CoinFlowSession.TrackedItem.PriceBasis.HIGH_ALCH;
 				CoinFlowSession.TrackedItem itemExpense = new CoinFlowSession.TrackedItem(
 					canonicalLostId, alchedItemName, bankedQty, alchedItemMarketPrice
-				);
+				).withProvenance(CoinFlowSession.TrackedItem.Reason.ALCHED, alchBasis);
 				context.addSupplyExpense(canonicalLostId, itemExpense);
 			}
 
 			long unitMargin = haPrice - alchedItemMarketPrice;
 			long totalMargin = unitMargin * alchedQty;
 
+			context.tagGain(ItemID.COINS, CoinFlowSession.TrackedItem.Reason.ALCHED);
 			context.setAlchedDropItemId(ItemID.COINS);
 			context.setAlchedTotalMargin(totalMargin);
 			context.setAlchedItemRawId(alchedLostId);

@@ -56,6 +56,17 @@ final class SessionApplier
 		processGainsLossesAndExpenses(rawGains, Collections.emptyMap(), Collections.emptyMap(), -1);
 	}
 
+	void processGains(Map<Integer, Integer> rawGains, CoinFlowSession.TrackedItem.Reason gainReason)
+	{
+		Map<Integer, CoinFlowSession.TrackedItem.Reason> reasons = new HashMap<>();
+		for (Integer itemId : rawGains.keySet())
+		{
+			reasons.put(plugin.itemManager.canonicalize(itemId), gainReason);
+		}
+		processGainsLossesAndExpenses(rawGains, Collections.emptyMap(), Collections.emptyMap(), -1,
+			Collections.emptySet(), Collections.emptySet(), reasons);
+	}
+
 	/**
 	 * Processes raw item gains and supply expenses atomically:
 	 * looks up prices, updates the session, and triggers gold drops for positive gains.
@@ -113,6 +124,19 @@ final class SessionApplier
 		Set<Integer> exemptProductIds,
 		Set<Integer> fractionalExpenseIds)
 	{
+		processGainsLossesAndExpenses(rawGains, droppedGainsDeductions, supplyExpenses, alchedDropItemId,
+			exemptProductIds, fractionalExpenseIds, Collections.emptyMap());
+	}
+
+	void processGainsLossesAndExpenses(
+		Map<Integer, Integer> rawGains,
+		Map<Integer, CoinFlowSession.TrackedItem> droppedGainsDeductions,
+		Map<Integer, CoinFlowSession.TrackedItem> supplyExpenses,
+		int alchedDropItemId,
+		Set<Integer> exemptProductIds,
+		Set<Integer> fractionalExpenseIds,
+		Map<Integer, CoinFlowSession.TrackedItem.Reason> gainReasons)
+	{
 		Map<Integer, CoinFlowSession.TrackedItem> trackedGains = new HashMap<>();
 
 		for (Map.Entry<Integer, Integer> entry : rawGains.entrySet())
@@ -137,15 +161,18 @@ final class SessionApplier
 			}
 
 			// Look up price (Fixes Bug 7: coins and platinum tokens)
-			long price = ItemPricing.priceOf(itemId, plugin.itemManager);
+			ItemPricing.Priced priced = ItemPricing.priced(itemId, plugin.itemManager);
 
+			CoinFlowSession.TrackedItem.Reason reason =
+				gainReasons.getOrDefault(itemId, CoinFlowSession.TrackedItem.Reason.GAINED);
 			CoinFlowSession.TrackedItem trackedItem =
-				new CoinFlowSession.TrackedItem(itemId, itemName, quantity, price);
+				new CoinFlowSession.TrackedItem(itemId, itemName, quantity, priced.price)
+					.withProvenance(reason, priced.basis);
 			trackedGains.merge(itemId, trackedItem,
 				(existing, added) -> existing.merge(added));
 
 			log.debug("Gained: {} x{} @ {} gp each = {} gp",
-				itemName, quantity, price, (long) quantity * price);
+				itemName, quantity, priced.price, (long) quantity * priced.price);
 		}
 
 		// Drain basis even when spent tracking is off or the expense is ignored so

@@ -300,13 +300,16 @@ final class BlastFurnaceTracker
 		}
 
 		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
+		Map<Integer, CoinFlowSession.TrackedItem.Reason> gainReasons = new HashMap<>();
 		for (Map.Entry<Integer, Integer> entry : rescued.entrySet())
 		{
 			recipeExpenses(entry.getKey(), entry.getValue())
 				.forEach((id, item) -> expenses.merge(id, item, (a, b) -> a.merge(b)));
+			gainReasons.put(entry.getKey(), CoinFlowSession.TrackedItem.Reason.PROCESSING_OUTPUT);
 		}
 		log.debug("Blast Furnace bars rescued from re-baseline: {}", rescued);
-		plugin.processGainsLossesAndExpenses(rescued, Collections.emptyMap(), expenses);
+		plugin.processGainsLossesAndExpenses(rescued, Collections.emptyMap(), expenses,
+			-1, Collections.emptySet(), Collections.emptySet(), gainReasons);
 	}
 
 	// ── Coffer settlement ───────────────────────────────────────────────
@@ -440,7 +443,9 @@ final class BlastFurnaceTracker
 		}
 		Map<Integer, CoinFlowSession.TrackedItem> expenses = new HashMap<>();
 		expenses.put(COFFER_ROW_ID,
-			new CoinFlowSession.TrackedItem(COFFER_ROW_ID, COFFER_ROW_NAME, gp, 1L));
+			new CoinFlowSession.TrackedItem(COFFER_ROW_ID, COFFER_ROW_NAME, gp, 1L)
+				.withProvenance(CoinFlowSession.TrackedItem.Reason.SYNTHETIC,
+					CoinFlowSession.TrackedItem.PriceBasis.FIXED));
 		log.debug("Blast Furnace coffer drain charged: {} gp", gp);
 		plugin.processGainsLossesAndExpenses(Collections.emptyMap(), Collections.emptyMap(), expenses);
 	}
@@ -464,9 +469,10 @@ final class BlastFurnaceTracker
 			{
 				continue;
 			}
-			long price = ItemPricing.priceOf(inputId, plugin.itemManager);
+			ItemPricing.Priced priced = ItemPricing.priced(inputId, plugin.itemManager);
 			expenses.merge(inputId,
-				new CoinFlowSession.TrackedItem(inputId, inputName, (long) input.getValue() * barQty, price),
+				new CoinFlowSession.TrackedItem(inputId, inputName, (long) input.getValue() * barQty, priced.price)
+					.withProvenance(CoinFlowSession.TrackedItem.Reason.PROCESSING_INPUT, priced.basis),
 				(a, b) -> a.merge(b));
 		}
 		return expenses;

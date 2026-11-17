@@ -227,9 +227,19 @@ public class PotionDoseHandler implements ReconciliationHandler
 				String expenseName = (sampleBaseName != null ? sampleBaseName : "Potion") + " (dose)";
 				if (!context.isIgnored(sampleBaseName) && !context.isIgnored(expenseName))
 				{
-					context.addFractionalSupplyExpense(sampleCanonicalId,
+					CoinFlowSession.TrackedItem.PriceBasis doseBasis = potionPrice > 0
+						? CoinFlowSession.TrackedItem.PriceBasis.GE_PRICE
+						: CoinFlowSession.TrackedItem.PriceBasis.UNPRICED;
+					CoinFlowSession.TrackedItem doseExpense =
 						new CoinFlowSession.TrackedItem(sampleCanonicalId, expenseName, dosesConsumed,
-							expenseTotal / dosesConsumed));
+							expenseTotal / dosesConsumed)
+							.withProvenance(CoinFlowSession.TrackedItem.Reason.DOSE, doseBasis);
+					if (basisCost > 0)
+					{
+						doseExpense = doseExpense.withProvenance(null,
+							CoinFlowSession.TrackedItem.PriceBasis.PURCHASE_COST);
+					}
+					context.addFractionalSupplyExpense(sampleCanonicalId, doseExpense);
 					log.debug("Consumed supply: {} x{} @ {} gp = {} gp",
 						expenseName, dosesConsumed, expenseTotal / dosesConsumed, expenseTotal);
 				}
