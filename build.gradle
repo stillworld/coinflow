@@ -36,6 +36,12 @@ tasks.withType(JavaCompile).configureEach {
 	options.release.set(11)
 }
 
+// Ship the hub manifest on the classpath so Version can read the real
+// release version instead of a duplicated constant.
+processResources {
+	from(rootProject.file('runelite-plugin.properties'))
+}
+
 tasks.withType(JavaExec).configureEach {
 	jvmArgs(
 		"-ea",

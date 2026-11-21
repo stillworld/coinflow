@@ -85,6 +85,10 @@ public class CoinFlowPanel extends PluginPanel
 	private final JButton toggleCompactButton = new JButton("Compact");
 	private final JButton configButton = new JButton();
 
+	// ── Update Notes UI ──────────────────────────────────────────────────
+	private final JPanel updateNotesCard = new JPanel();
+	private final JButton updateNotesDismissButton = new JButton("Got it");
+
 	// ── Session Summary UI ───────────────────────────────────────────────
 	final JPanel sessionCard = new JPanel();
 	private final JLabel sessionCollapsedPreviewLabel = new JLabel("", SwingConstants.RIGHT);
@@ -224,27 +228,32 @@ public class CoinFlowPanel extends PluginPanel
 		add(headerPanel, c);
 		c.gridy++;
 
-		// 2. Session Summary Card
+		// 2. Update Notes Card (hidden until a version bump is detected)
+		c.insets = new Insets(0, 0, 10, 0);
+		add(updateNotesCard, c);
+		c.gridy++;
+
+		// 3. Session Summary Card
 		c.insets = new Insets(0, 0, 10, 0);
 		add(sessionCard, c);
 		c.gridy++;
 
-		// 3. Goal Card
+		// 4. Goal Card
 		c.insets = new Insets(0, 0, 10, 0);
 		add(goalCard, c);
 		c.gridy++;
 
-		// 4. Activity Timeline Card
+		// 5. Activity Timeline Card
 		c.insets = new Insets(0, 0, 10, 0);
 		add(timelineCard, c);
 		c.gridy++;
 
-		// 5. Item Breakdown Card
+		// 6. Item Breakdown Card
 		c.insets = new Insets(0, 0, 0, 0);
 		add(itemsCard, c);
 		c.gridy++;
 
-		// 5. Spacer panel to absorb remaining vertical space and keep cards at the top
+		// 7. Spacer panel to absorb remaining vertical space and keep cards at the top
 		c.weighty = 1.0;
 		c.fill = GridBagConstraints.BOTH;
 		JPanel filler = new JPanel();
@@ -256,6 +265,7 @@ public class CoinFlowPanel extends PluginPanel
 		initGoalComponents();
 		initSessionComponents();
 		initHeaderComponents();
+		initUpdateNotesComponents();
 
 		// Synchronize initial state
 		onConfigChanged();
@@ -319,6 +329,90 @@ public class CoinFlowPanel extends PluginPanel
 		}
 		SwingUtil.removeButtonDecorations(configButton);
 		configButton.addActionListener(e -> plugin.openConfiguration());
+	}
+
+	private void initUpdateNotesComponents()
+	{
+		updateNotesCard.setVisible(false);
+		styleButton(updateNotesDismissButton);
+		updateNotesDismissButton.addActionListener(e -> {
+			// The seen version was already persisted at detection time; this
+			// just hides the card for the rest of the session.
+			updateNotesCard.setVisible(false);
+			revalidate();
+			repaint();
+		});
+	}
+
+	/**
+	 * Renders the What's New card for a freshly detected version and reveals
+	 * it. Called once per release by SessionLifecycleManager.checkForPluginUpdate;
+	 * entries arrive newest-first.
+	 */
+	void showUpdateNotes(List<Changelog.Entry> notes)
+	{
+		if (!initialized || notes == null || notes.isEmpty())
+		{
+			return;
+		}
+
+		boolean compact = config.compactMode();
+		updateNotesCard.removeAll();
+		updateNotesCard.setLayout(new GridBagLayout());
+		updateNotesCard.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		updateNotesCard.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(1, 1, 1, 1, ColorScheme.DARK_GRAY_HOVER_COLOR),
+			new EmptyBorder(compact ? 6 : 8, compact ? 6 : 8, compact ? 6 : 8, compact ? 6 : 8)
+		));
+
+		GridBagConstraints c = new GridBagConstraints();
+		c.fill = GridBagConstraints.HORIZONTAL;
+		c.weightx = 1.0;
+		c.gridx = 0;
+		c.gridy = 0;
+
+		JLabel title = new JLabel("What's New in " + Version.getFormattedVersion());
+		title.setFont(FontManager.getRunescapeBoldFont());
+		title.setForeground(ACCENT_GOLD);
+		c.insets = new Insets(0, 0, compact ? 4 : 6, 0);
+		updateNotesCard.add(title, c);
+		c.gridy++;
+
+		boolean multipleReleases = notes.size() > 1;
+		for (Changelog.Entry entry : notes)
+		{
+			if (multipleReleases)
+			{
+				JLabel versionHeader = new JLabel("v" + entry.version);
+				versionHeader.setFont(FontManager.getRunescapeBoldFont());
+				versionHeader.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				c.insets = new Insets(compact ? 3 : 5, 0, 2, 0);
+				updateNotesCard.add(versionHeader, c);
+				c.gridy++;
+			}
+			for (String bullet : entry.bullets)
+			{
+				// Wrapped in HTML so long notes wrap at the card width. Use the
+				// Latin-1 middle dot (used elsewhere in the panel) — the
+				// runescape font has no bullet glyph and would draw tofu.
+				JLabel line = new JLabel("<html>&#183;&nbsp;" + bullet + "</html>");
+				line.setFont(FontManager.getRunescapeSmallFont());
+				line.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+				c.insets = new Insets(0, 0, 2, 0);
+				updateNotesCard.add(line, c);
+				c.gridy++;
+			}
+		}
+
+		c.insets = new Insets(compact ? 4 : 6, 0, 0, 0);
+		c.anchor = GridBagConstraints.EAST;
+		updateNotesCard.add(updateNotesDismissButton, c);
+
+		updateNotesCard.setVisible(true);
+		updateNotesCard.revalidate();
+		updateNotesCard.repaint();
+		revalidate();
+		repaint();
 	}
 
 	private void initSessionComponents()
