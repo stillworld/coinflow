@@ -576,6 +576,8 @@ public class CoinFlowPlugin extends Plugin
 
 		clientToolbar.addNavigation(navButton);
 
+		lifecycleManager.checkForPluginUpdate();
+
 		// If we're already logged in (plugin enabled mid-session), take baseline now
 		if (client != null && client.getGameState() == GameState.LOGGED_IN)
 		{

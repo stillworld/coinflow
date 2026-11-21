@@ -287,6 +287,133 @@ public class ProcessingPatternRegistryTest
 	}
 
 	@Test
+	public void crafting_hydraLeatherFerociousGloves_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult craft =
+			ProcessingPatternRegistry.match("Hydra leather", "Ferocious gloves", 1);
+		Assert.assertNotNull(craft);
+		Assert.assertEquals(1, craft.getPrimaryConsumedQty());
+
+		// The same machine reverts the gloves back to leather
+		ProcessingPatternRegistry.MatchResult revert =
+			ProcessingPatternRegistry.match("Ferocious gloves", "Hydra leather", 1);
+		Assert.assertNotNull(revert);
+		Assert.assertEquals(1, revert.getPrimaryConsumedQty());
+	}
+
+	@Test
+	public void gearUpgrades_bonecrusherNecklace_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult combine =
+			ProcessingPatternRegistry.match("Hydra tail", "Bonecrusher necklace", 1);
+		Assert.assertNotNull(combine);
+		Assert.assertEquals(1, combine.getPrimaryConsumedQty());
+		Assert.assertEquals(Integer.valueOf(1), combine.getSecondariesNeeded().get("dragonbone necklace"));
+		Assert.assertEquals(Integer.valueOf(1), combine.getSecondariesNeeded().get("bonecrusher"));
+
+		// Reversing returns the components
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Bonecrusher necklace", "Hydra tail", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Bonecrusher necklace", "Dragonbone necklace", 1));
+	}
+
+	@Test
+	public void gearUpgrades_neitiznotFaceguard_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult combine =
+			ProcessingPatternRegistry.match("Basilisk jaw", "Neitiznot faceguard", 1);
+		Assert.assertNotNull(combine);
+		Assert.assertEquals(1, combine.getPrimaryConsumedQty());
+		Assert.assertEquals(Integer.valueOf(1), combine.getSecondariesNeeded().get("helm of neitiznot"));
+
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Neitiznot faceguard", "Basilisk jaw", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Neitiznot faceguard", "Helm of neitiznot", 1));
+	}
+
+	@Test
+	public void gearUpgrades_nightmareStaves_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult combine =
+			ProcessingPatternRegistry.match("Nightmare staff", "Eldritch nightmare staff", 1);
+		Assert.assertNotNull(combine);
+		Assert.assertEquals(1, combine.getPrimaryConsumedQty());
+		Assert.assertEquals(Integer.valueOf(1), combine.getSecondariesNeeded().get("eldritch orb"));
+
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Eldritch nightmare staff", "Nightmare staff", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Volatile nightmare staff", "Volatile orb", 1));
+	}
+
+	@Test
+	public void gearUpgrades_elidinisWard_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult fortify =
+			ProcessingPatternRegistry.match("Elidinis' ward", "Elidinis' ward (f)", 1);
+		Assert.assertNotNull(fortify);
+		Assert.assertEquals(1, fortify.getPrimaryConsumedQty());
+		Assert.assertEquals(Integer.valueOf(1), fortify.getSecondariesNeeded().get("arcane sigil"));
+		Assert.assertEquals(Integer.valueOf(10_000), fortify.getSecondariesNeeded().get("soul rune"));
+
+		// Dismantle returns ward + sigil (not the soul runes)
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Elidinis' ward (f)", "Elidinis' ward", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Elidinis' ward (f)", "Arcane sigil", 1));
+	}
+
+	@Test
+	public void gearUpgrades_avernicTreads_upgradeAndDismantle()
+	{
+		ProcessingPatternRegistry.MatchResult single =
+			ProcessingPatternRegistry.match("Avernic treads", "Avernic treads (pr)", 1);
+		Assert.assertNotNull(single);
+		Assert.assertEquals(Integer.valueOf(1), single.getSecondariesNeeded().get("primordial boots"));
+		Assert.assertEquals(Integer.valueOf(4_000), single.getSecondariesNeeded().get("demon tear"));
+
+		// Second pair onto an upgraded set
+		ProcessingPatternRegistry.MatchResult dual =
+			ProcessingPatternRegistry.match("Avernic treads (pr)", "Avernic treads (pr)(pe)", 1);
+		Assert.assertNotNull(dual);
+		Assert.assertEquals(Integer.valueOf(1), dual.getSecondariesNeeded().get("pegasian boots"));
+		Assert.assertEquals(Integer.valueOf(4_000), dual.getSecondariesNeeded().get("demon tear"));
+
+		// Dismantle returns the base treads and every attached pair
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Avernic treads (pr)(pe)", "Avernic treads", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Avernic treads (max)", "Primordial boots", 1));
+	}
+
+	@Test
+	public void gearUpgrades_synapseWeapons_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult ember =
+			ProcessingPatternRegistry.match("Tormented synapse", "Emberlight", 1);
+		Assert.assertNotNull(ember);
+		Assert.assertEquals(Integer.valueOf(1), ember.getSecondariesNeeded().get("arclight"));
+
+		ProcessingPatternRegistry.MatchResult bow =
+			ProcessingPatternRegistry.match("Tormented synapse", "Scorching bow", 1);
+		Assert.assertNotNull(bow);
+		Assert.assertEquals(Integer.valueOf(1), bow.getSecondariesNeeded().get("magic longbow (u)"));
+
+		ProcessingPatternRegistry.MatchResult staff =
+			ProcessingPatternRegistry.match("Tormented synapse", "Purging staff", 1);
+		Assert.assertNotNull(staff);
+		Assert.assertEquals(Integer.valueOf(1), staff.getSecondariesNeeded().get("battlestaff"));
+		Assert.assertEquals(Integer.valueOf(1), staff.getSecondariesNeeded().get("iron bar"));
+
+		// Revert returns only the synapse
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Emberlight", "Tormented synapse", 1));
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Purging staff", "Tormented synapse", 1));
+	}
+
+	@Test
+	public void gearUpgrades_crystalTools_bothDirections()
+	{
+		ProcessingPatternRegistry.MatchResult make =
+			ProcessingPatternRegistry.match("Crystal tool seed", "Crystal axe", 1);
+		Assert.assertNotNull(make);
+		Assert.assertEquals(Integer.valueOf(1), make.getSecondariesNeeded().get("dragon axe"));
+
+		Assert.assertNotNull(ProcessingPatternRegistry.match("Crystal axe", "Crystal tool seed", 1));
+	}
+
+	@Test
 	public void smithing_cannonballs_1BarTo4Cannonballs()
 	{
 		ProcessingPatternRegistry.MatchResult res =

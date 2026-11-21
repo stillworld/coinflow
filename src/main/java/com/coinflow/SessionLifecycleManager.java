@@ -1,7 +1,9 @@
 package com.coinflow;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import javax.swing.SwingUtilities;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.GameState;
 import net.runelite.api.Item;
@@ -24,9 +26,51 @@ final class SessionLifecycleManager
 {
 	private final CoinFlowPlugin plugin;
 
+	/**
+	 * Hidden config key recording the newest plugin version whose release
+	 * notes were shown. Absent until the first startUp of a build carrying
+	 * the update-notes feature.
+	 */
+	static final String LAST_SEEN_VERSION_KEY = "lastSeenVersion";
+
 	SessionLifecycleManager(CoinFlowPlugin plugin)
 	{
 		this.plugin = plugin;
+	}
+
+	/**
+	 * If the running build is newer than the version whose notes were last
+	 * shown (or the user has no recorded version — first run, or upgrade
+	 * from a build predating the update card), populate the What's New card
+	 * and open the sidebar once. The seen version is always brought up to
+	 * date, so the card appears at most once per release. Called at the end
+	 * of {@code startUp} after the nav button exists.
+	 */
+	void checkForPluginUpdate()
+	{
+		String current = Version.getVersion();
+		String lastSeen = plugin.configManager.getConfiguration(
+			CoinFlowConfig.CONFIG_GROUP, LAST_SEEN_VERSION_KEY);
+		if (lastSeen != null && Version.compare(current, lastSeen) <= 0)
+		{
+			return;
+		}
+		plugin.configManager.setConfiguration(
+			CoinFlowConfig.CONFIG_GROUP, LAST_SEEN_VERSION_KEY, current);
+
+		List<Changelog.Entry> notes = Changelog.newerThan(lastSeen);
+		if (notes.isEmpty() || plugin.panel == null || plugin.navButton == null || plugin.clientToolbar == null)
+		{
+			return;
+		}
+		plugin.panel.showUpdateNotes(notes);
+		SwingUtilities.invokeLater(() ->
+		{
+			if (plugin.navButton != null && plugin.clientToolbar != null)
+			{
+				plugin.clientToolbar.openPanel(plugin.navButton);
+			}
+		});
 	}
 
 	void onGameStateChanged(GameStateChanged event)
@@ -111,10 +155,11 @@ final class SessionLifecycleManager
 	{
 		if (event.getGroup().equals(CoinFlowConfig.CONFIG_GROUP))
 		{
-			// Goal checkpoint writes are internal bookkeeping — ignore them so
-			// every persist doesn't rebuild the filter set or spam the log.
+			// Goal checkpoint and version-seen writes are internal bookkeeping —
+			// ignore them so every persist doesn't rebuild the filter set or spam the log.
 			String changedKey = event.getKey();
-			if (changedKey != null && changedKey.startsWith(GoalTracker.PROGRESS_KEY_PREFIX))
+			if (changedKey != null && (changedKey.startsWith(GoalTracker.PROGRESS_KEY_PREFIX)
+				|| changedKey.equals(LAST_SEEN_VERSION_KEY)))
 			{
 				return;
 			}
