@@ -9,7 +9,8 @@ import java.util.Set;
 
 /**
  * Stateless semantic pattern matcher for Old School RuneScape production and processing skills.
- * Recognizes transformations in Cooking, Fletching, Herblore, Crafting, Smithing, and Magic.
+ * Recognizes transformations in Cooking, Fletching, Herblore, Crafting, Smithing, Magic,
+ * Runecrafting, and gear upgrades/dismantles.
  */
 public final class ProcessingPatternRegistry
 {
@@ -241,6 +242,13 @@ public final class ProcessingPatternRegistry
 		if (runecrafting != null)
 		{
 			return runecrafting;
+		}
+
+		// 8. Gear upgrades & dismantles
+		MatchResult upgrades = matchGearUpgrades(lostLower, gainedLower, gainedQty);
+		if (upgrades != null)
+		{
+			return upgrades;
 		}
 
 		return null;
@@ -998,5 +1006,191 @@ public final class ProcessingPatternRegistry
 		}
 
 		return null;
+	}
+
+	// ── 8. Gear Upgrades & Dismantles ───────────────────────────────────
+	// Untradeable equipment assembled from tradeable components. ItemManager
+	// prices these products through ItemMapping at a component's GE value, so
+	// an unmatched assembly books the product as pure profit (and an
+	// unmatched dismantle books the returned components as pure income).
+	private static MatchResult matchGearUpgrades(String lost, String gained, int gainedQty)
+	{
+		// A. Ferocious gloves: hydra leather through the Lithkren Vault
+		//    machinery; the machine also reverts gloves to leather.
+		if ((lost.equals("hydra leather") && gained.equals("ferocious gloves"))
+			|| (lost.equals("ferocious gloves") && gained.equals("hydra leather")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// B. Bonecrusher necklace: hydra tail + dragonbone necklace +
+		//    bonecrusher. Reversed, it returns all three components.
+		if (lost.equals("hydra tail") && gained.equals("bonecrusher necklace"))
+		{
+			Map<String, Integer> secondaries = new HashMap<>();
+			secondaries.put("dragonbone necklace", gainedQty);
+			secondaries.put("bonecrusher", gainedQty);
+			return new MatchResult(gainedQty, secondaries, false);
+		}
+		if (lost.equals("bonecrusher necklace")
+			&& (gained.equals("hydra tail") || gained.equals("dragonbone necklace") || gained.equals("bonecrusher")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// C. Neitiznot faceguard: basilisk jaw + helm of neitiznot (Dismantle).
+		if (lost.equals("basilisk jaw") && gained.equals("neitiznot faceguard"))
+		{
+			return new MatchResult(gainedQty,
+				Collections.singletonMap("helm of neitiznot", gainedQty), false);
+		}
+		if (lost.equals("neitiznot faceguard")
+			&& (gained.equals("basilisk jaw") || gained.equals("helm of neitiznot")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// D. Nightmare staves: nightmare staff + <element> orb (Dismantle).
+		if (lost.equals("nightmare staff")
+			&& (gained.equals("eldritch nightmare staff") || gained.equals("harmonised nightmare staff")
+				|| gained.equals("volatile nightmare staff")))
+		{
+			String element = gained.substring(0, gained.indexOf(' '));
+			return new MatchResult(gainedQty,
+				Collections.singletonMap(element + " orb", gainedQty), false);
+		}
+		if ((lost.equals("eldritch nightmare staff") || lost.equals("harmonised nightmare staff")
+				|| lost.equals("volatile nightmare staff"))
+			&& (gained.equals("nightmare staff")
+				|| gained.equals(lost.substring(0, lost.indexOf(' ')) + " orb")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// E. Elidinis' ward (f): ward + arcane sigil + 10,000 soul runes.
+		//    Dismantle returns the ward and sigil; the soul runes are lost.
+		if (lost.equals("elidinis' ward") && gained.equals("elidinis' ward (f)"))
+		{
+			Map<String, Integer> secondaries = new HashMap<>();
+			secondaries.put("arcane sigil", gainedQty);
+			secondaries.put("soul rune", gainedQty * 10_000);
+			return new MatchResult(gainedQty, secondaries, false);
+		}
+		if (lost.equals("elidinis' ward (f)")
+			&& (gained.equals("elidinis' ward") || gained.equals("arcane sigil")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// F. Avernic treads: one boot pair + 4,000 demon tears per upgrade
+		//    step, added in any order. Dismantle returns the base treads and
+		//    every attached pair — the tears are lost.
+		if (lost.startsWith("avernic treads") && gained.startsWith("avernic treads"))
+		{
+			Set<String> added = avernicPairs(gained);
+			added.removeAll(avernicPairs(lost));
+			if (!added.isEmpty())
+			{
+				Map<String, Integer> secondaries = new HashMap<>();
+				for (String pair : added)
+				{
+					secondaries.put(pair + " boots", gainedQty);
+				}
+				secondaries.put("demon tear", gainedQty * 4_000 * added.size());
+				return new MatchResult(gainedQty, secondaries, false);
+			}
+			if (gained.equals("avernic treads") && !avernicPairs(lost).isEmpty())
+			{
+				return new MatchResult(gainedQty, null, false);
+			}
+		}
+		if (lost.startsWith("avernic treads (")
+			&& (gained.equals("primordial boots") || gained.equals("pegasian boots") || gained.equals("eternal boots")))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// G. Tormented synapse weapons: synapse + components. "Revert" returns
+		//    only the synapse — the other components are lost for good.
+		if (lost.equals("tormented synapse"))
+		{
+			Map<String, Integer> secondaries = null;
+			if (gained.equals("emberlight"))
+			{
+				secondaries = Collections.singletonMap("arclight", gainedQty);
+			}
+			else if (gained.equals("scorching bow"))
+			{
+				secondaries = Collections.singletonMap("magic longbow (u)", gainedQty);
+			}
+			else if (gained.equals("purging staff"))
+			{
+				secondaries = new HashMap<>();
+				secondaries.put("battlestaff", gainedQty);
+				secondaries.put("iron bar", gainedQty);
+			}
+			if (secondaries != null)
+			{
+				return new MatchResult(gainedQty, secondaries, false);
+			}
+		}
+		if ((lost.equals("emberlight") || lost.equals("scorching bow") || lost.equals("purging staff"))
+			&& gained.equals("tormented synapse"))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		// H. Crystal tools: crystal tool seed + dragon tool. Tools revert to
+		//    the seed at a singing bowl; the dragon tool is not returned.
+		String crystalTool = null;
+		if (gained.equals("crystal axe"))
+		{
+			crystalTool = "dragon axe";
+		}
+		else if (gained.equals("crystal felling axe"))
+		{
+			crystalTool = "dragon felling axe|dragon axe";
+		}
+		else if (gained.equals("crystal pickaxe"))
+		{
+			crystalTool = "dragon pickaxe";
+		}
+		else if (gained.equals("crystal harpoon"))
+		{
+			crystalTool = "dragon harpoon";
+		}
+		if (crystalTool != null && lost.equals("crystal tool seed"))
+		{
+			return new MatchResult(gainedQty,
+				Collections.singletonMap(crystalTool, gainedQty), false);
+		}
+		if (lost.startsWith("crystal ")
+			&& (lost.equals("crystal axe") || lost.equals("crystal felling axe")
+				|| lost.equals("crystal pickaxe") || lost.equals("crystal harpoon"))
+			&& gained.equals("crystal tool seed"))
+		{
+			return new MatchResult(gainedQty, null, false);
+		}
+
+		return null;
+	}
+
+	/** Boot pairs attached to an avernic treads variant name. */
+	private static Set<String> avernicPairs(String name)
+	{
+		Set<String> pairs = new HashSet<>();
+		if (name.contains("(max"))
+		{
+			pairs.add("primordial");
+			pairs.add("pegasian");
+			pairs.add("eternal");
+		}
+		else
+		{
+			if (name.contains("(pr")) pairs.add("primordial");
+			if (name.contains("(pe")) pairs.add("pegasian");
+			if (name.contains("(et")) pairs.add("eternal");
+		}
+		return pairs;
 	}
 }
