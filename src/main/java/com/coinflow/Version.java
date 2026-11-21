@@ -13,7 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class Version
 {
-	private static final String FALLBACK_VERSION = "1.14.0";
+	private static final String FALLBACK_VERSION = "1.15.0";
 	private static final String VERSION = loadVersion();
 
 	private Version()

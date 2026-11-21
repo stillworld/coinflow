@@ -28,7 +28,8 @@ final class Changelog
 
 	/** Newest release first. */
 	private static final List<Entry> ENTRIES = Collections.unmodifiableList(Arrays.asList(
-		new Entry("1.14.1",
+		new Entry("1.15.0",
+			"Added this What's New card \u2014 release notes show once after each update",
 			"Fixed untradeable crafted gear (Ferocious gloves, Neitiznot faceguard, nightmare "
 				+ "staves, Elidinis' ward (f), avernic treads, tormented weapons, crystal tools) "
 				+ "counting as pure profit \u2014 assembly and dismantle now net against their components"),
