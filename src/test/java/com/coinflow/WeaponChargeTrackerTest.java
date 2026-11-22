@@ -325,6 +325,34 @@ public class WeaponChargeTrackerTest
 	}
 
 	@Test
+	public void ringOfTheElementsVarbit_recordsTeleportRunes()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+		seed(tracker, VarbitID.RING_OF_THE_ELEMENTS_CHARGES, 100);
+
+		tracker.onVarbitChanged(VarbitID.RING_OF_THE_ELEMENTS_CHARGES, 98, true, 1);
+
+		Map<Integer, Integer> spent = tracker.drain();
+		Assert.assertEquals(2, spent.get(ItemID.AIRRUNE).intValue());
+		Assert.assertEquals(2, spent.get(ItemID.WATERRUNE).intValue());
+		Assert.assertEquals(2, spent.get(ItemID.EARTHRUNE).intValue());
+		Assert.assertEquals(2, spent.get(ItemID.FIRERUNE).intValue());
+		Assert.assertEquals(2, spent.get(ItemID.LAWRUNE).intValue());
+	}
+
+	@Test
+	public void ringOfTheElementsUncharge_suppressed_baselinesWithoutExpense()
+	{
+		WeaponChargeTracker tracker = new WeaponChargeTracker();
+		seed(tracker, VarbitID.RING_OF_THE_ELEMENTS_CHARGES, 10000);
+
+		// Uncharge refunds every stored rune — the varbit dropping to 0 while
+		// tracking is disallowed (rebaseline pending) must not book as spend.
+		tracker.onVarbitChanged(VarbitID.RING_OF_THE_ELEMENTS_CHARGES, 0, false, 1);
+		Assert.assertTrue(tracker.drain().isEmpty());
+	}
+
+	@Test
 	public void chargeIncrease_isRechargeNotExpense()
 	{
 		WeaponChargeTracker tracker = new WeaponChargeTracker();

@@ -286,6 +286,33 @@ final class WeaponChargeTracker
 			new WeaponConfig("bonecrusher", new ChargeCost(ItemID.DRAGONBONE_NECKLACE, 1, 500)));
 		CONFIGS.put(VarbitID.CHARGES_CRYSTAL_TOOLS_QUANTITY,
 			new WeaponConfig("crystal tool", new ChargeCost(ItemID.PRIF_CRYSTAL_SHARD, 1, 100)));
+		// Charged jewelry/tools whose stored materials are refunded on Uncharge.
+		// Ring of the elements: 1 of each elemental rune + 1 law per teleport.
+		CONFIGS.put(VarbitID.RING_OF_THE_ELEMENTS_CHARGES,
+			new WeaponConfig("ring of the elements",
+				new ChargeCost(ItemID.AIRRUNE, 1, 1),
+				new ChargeCost(ItemID.WATERRUNE, 1, 1),
+				new ChargeCost(ItemID.EARTHRUNE, 1, 1),
+				new ChargeCost(ItemID.FIRERUNE, 1, 1),
+				new ChargeCost(ItemID.LAWRUNE, 1, 1)));
+		CONFIGS.put(VarbitID.CHARGES_RING_OF_SHADOWS_QUANTITY,
+			new WeaponConfig("ring of shadows",
+				new ChargeCost(ItemID.BLOODRUNE, 1, 1),
+				new ChargeCost(ItemID.DEATHRUNE, 1, 1),
+				new ChargeCost(ItemID.LAWRUNE, 1, 1),
+				new ChargeCost(ItemID.SOULRUNE, 1, 1)));
+		// Soul bearer: 1 blood + 1 soul rune per ensouled head sent to the bank.
+		CONFIGS.put(VarbitID.CHARGES_SOUL_BEARER_QUANTITY,
+			new WeaponConfig("soul bearer",
+				new ChargeCost(ItemID.BLOODRUNE, 1, 1),
+				new ChargeCost(ItemID.SOULRUNE, 1, 1)));
+		CONFIGS.put(VarbitID.CHARGES_PENDANT_OF_ATES_QUANTITY,
+			new WeaponConfig("pendant of ates", new ChargeCost(ItemID.FROZEN_TEAR, 1, 1)));
+		// Circlet of water: 5 water runes per desert-heat sip.
+		CONFIGS.put(VarbitID.CHARGES_CIRCLET_OF_WATER_QUANTITY,
+			new WeaponConfig("circlet of water", new ChargeCost(ItemID.WATERRUNE, 5, 1)));
+		CONFIGS.put(VarbitID.CHARGES_COWBELL_AMULET_QUANTITY,
+			new WeaponConfig("cowbell amulet", new ChargeCost(ItemID.AIRRUNE, 1, 1)));
 
 		// Not covered: nightmare staves (no per-attack cost), abyssal tentacle
 		// (degrades to breakage, not charged), dizana's quiver (no per-attack

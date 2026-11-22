@@ -58,6 +58,10 @@ final class ActionClassifiers
 			|| lowerTarget.contains("tome of fire") || lowerTarget.contains("tome of water")
 			|| lowerTarget.contains("tome of earth")
 			|| lowerTarget.contains("ring of suffering") || lowerTarget.contains("xeric's talisman")
+			|| lowerTarget.contains("ring of the elements") || lowerTarget.contains("ring of shadows")
+			|| lowerTarget.contains("soul bearer") || lowerTarget.contains("circlet of water")
+			|| lowerTarget.contains("cowbell amulet") || lowerTarget.contains("pendant of ates")
+			|| lowerTarget.contains("bone staff") || lowerTarget.contains("eye of ayak")
 			|| lowerTarget.contains("bryophyta's staff") || lowerTarget.contains("arclight")
 			|| lowerTarget.contains("amulet of blood fury") || lowerTarget.contains("bracelet of ethereum");
 	}
