@@ -28,6 +28,11 @@ final class Changelog
 
 	/** Newest release first. */
 	private static final List<Entry> ENTRIES = Collections.unmodifiableList(Arrays.asList(
+		new Entry("1.16.0",
+			"Fixed uncharged items (ring of the elements, ring of shadows, soul bearer, "
+				+ "circlet of water, cowbell amulet, pendant of ates, bone staff, eye of ayak) "
+				+ "counting refunded runes as profit — charge/uncharge now re-baselines correctly",
+			"Per-use costs are now tracked for these items (e.g. runes per ring teleport)"),
 		new Entry("1.15.0",
 			"Added this What's New card \u2014 release notes show once after each update",
 			"Fixed untradeable crafted gear (Ferocious gloves, Neitiznot faceguard, nightmare "
