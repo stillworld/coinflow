@@ -34,6 +34,11 @@ import net.runelite.client.util.QuantityFormatter;
 @Slf4j
 final class InventoryDiffProcessor
 {
+	/** Window after a Charge/Uncharge click during which a charge-varbit transition re-arms the rebaseline. */
+	private static final int CHARGE_ACTION_INTENT_TICKS = 100;
+	/** Rebaseline ticks re-armed on a charge-varbit storage transition — the material diff lands same/next tick. */
+	private static final int CHARGE_ACTION_REARM_TICKS = 3;
+
 	private final CoinFlowPlugin plugin;
 
 	InventoryDiffProcessor(CoinFlowPlugin plugin)
@@ -1145,8 +1150,32 @@ final class InventoryDiffProcessor
 				&& !plugin.interfaceTracker.isShopOpen()
 				&& !plugin.interfaceTracker.isNeedsRebaseline() && plugin.rebaselineGraceTicks <= 0
 				&& !plugin.deathTracker.isPending();
-			plugin.weaponChargeTracker.onVarbitChanged(varbitId, value, trackingAllowed,
-				plugin.client.getTickCount());
+			onChargeVarbitObserved(varbitId, value, trackingAllowed, plugin.client.getTickCount());
+		}
+	}
+
+	/**
+	 * Feeds a charge-varbit observation to the tracker. A tracked varbit
+	 * dropping to 0 (Uncharge) or increasing (Charge deposit) shortly after a
+	 * charge-action click is a storage transition, not consumption — its
+	 * accompanying material diff can outlive the menu grace window while the
+	 * player sits in the confirmation/"how many" dialog, so the expense is
+	 * suppressed and the rebaseline re-armed to swallow the in-flight diff.
+	 */
+	void onChargeVarbitObserved(int varbitId, int value, boolean trackingAllowed, int tick)
+	{
+		int previous = plugin.weaponChargeTracker.lastObservedCharge(varbitId);
+		boolean recentChargeAction = tick - plugin.lastChargeActionTick <= CHARGE_ACTION_INTENT_TICKS;
+		boolean storageTransition = recentChargeAction
+			&& ((previous > 0 && value == 0) || (previous >= 0 && value > previous));
+		plugin.weaponChargeTracker.onVarbitChanged(varbitId, value,
+			trackingAllowed && !storageTransition, tick);
+		if (storageTransition)
+		{
+			plugin.interfaceTracker.setNeedsRebaseline(true);
+			plugin.rebaselineGraceTicks = Math.max(plugin.rebaselineGraceTicks, CHARGE_ACTION_REARM_TICKS);
+			log.debug("Charge storage transition on varbit {} ({} -> {}), re-arming rebaseline",
+				varbitId, previous, value);
 		}
 	}
 

@@ -495,6 +495,12 @@ final class WeaponChargeTracker
 		// lastLoadedDartItemId survives: the blowpipe's darts are still loaded
 	}
 
+	/** Last observed charge count for a tracked varbit, or -1 if unseen this session. */
+	int lastObservedCharge(int varbitId)
+	{
+		return lastCharges.getOrDefault(varbitId, -1);
+	}
+
 	static boolean isTrackedVarbit(int varbitId)
 	{
 		return CONFIGS.containsKey(varbitId);

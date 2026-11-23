@@ -219,7 +219,7 @@ final class GameTickProcessor
 					}
 					continue;
 				}
-				plugin.weaponChargeTracker.onVarbitChanged(varbitId, value,
+				plugin.inventoryDiffProcessor.onChargeVarbitObserved(varbitId, value,
 					chargeTrackingAllowed, plugin.client.getTickCount());
 			}
 		}

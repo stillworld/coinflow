@@ -26,23 +26,42 @@ final class ActionClassifiers
 		{
 			return false;
 		}
+		return isContainerTarget(lowerTarget) || isChargedItemTarget(lowerTarget);
+	}
+
+	private static boolean isContainerTarget(String lowerTarget)
+	{
 		return lowerTarget.contains("gem bag") || lowerTarget.contains("gem sack")
 			|| lowerTarget.contains("gem pouch") || lowerTarget.contains("gem satchel") || lowerTarget.contains("gem tote")
 			|| lowerTarget.contains("herb sack")
 			|| lowerTarget.contains("fish barrel") || lowerTarget.contains("fish sack barrel")
 			|| lowerTarget.contains("log basket") || lowerTarget.contains("forestry basket")
 			|| lowerTarget.contains("seed box")
-			|| lowerTarget.contains("ash sanctifier")
-			|| lowerTarget.contains("bonecrusher")
 			|| lowerTarget.contains("tackle box")
 			|| lowerTarget.contains("plank sack")
 			|| lowerTarget.contains("bottomless compost bucket")
 			|| lowerTarget.contains("coal bag")
 			// Essence pouches (small/medium/large/giant/colossal): Fill/Empty moves
 			// essence between inventory and pouch without consuming it.
-			|| lowerTarget.endsWith(" pouch") || lowerTarget.equals("pouch")
-			// Charged weapons: Charge/Uncharge/Unload actions return stored resources to
-			// inventory, so the diff must be rebaselined rather than treated as profit.
+			|| lowerTarget.endsWith(" pouch") || lowerTarget.equals("pouch");
+	}
+
+	/**
+	 * Items that store a consumable charge (runes, scales, shards, ...).
+	 * Charge/Uncharge/Unload clicks — and "Use <material> -> item" loads —
+	 * sit behind confirmation or "how many" dialogs, so they get a longer
+	 * re-baseline window and arm the charge-varbit storage-transition
+	 * detection. Pure containers (Fill/Empty, no dialog) stay on the short
+	 * window.
+	 */
+	static boolean isChargedItemTarget(String lowerTarget)
+	{
+		if (lowerTarget == null || isFarmingPatchAction(lowerTarget))
+		{
+			return false;
+		}
+		return lowerTarget.contains("ash sanctifier")
+			|| lowerTarget.contains("bonecrusher")
 			|| lowerTarget.contains("toxic blowpipe")
 			|| lowerTarget.contains("trident of the")
 			|| lowerTarget.contains("sanguinesti")

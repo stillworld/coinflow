@@ -456,6 +456,15 @@ public class CoinFlowPlugin extends Plugin
 	int lastLootingBagDepositItemId = -1;
 	String lastLootingBagDepositItemName = null;
 	int lastNotingServiceTick = -100;
+	/**
+	 * Tick of the most recent Charge/Uncharge/Unload click (or Use onto a
+	 * charged item). The server action can land long after the click —
+	 * uncharge refunds sit behind a confirmation dialog and charges behind a
+	 * "how many" input — so the charge varbit itself re-arms the rebaseline
+	 * when it transitions within this window (see
+	 * {@link InventoryDiffProcessor#onChargeVarbitObserved}).
+	 */
+	int lastChargeActionTick = -100;
 
 	/**
 	 * Canonical item id -> tick of the player's most recent "Drop" click. A loss
