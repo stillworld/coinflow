@@ -17,6 +17,21 @@ public class ActionClassifiersTest
 	}
 
 	@Test
+	public void isContainerOrChargedItemTarget_unchargeRefundItems_true()
+	{
+		// These all refund stored runes/materials on Uncharge — without a
+		// re-baseline the refund books as phantom profit.
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("ring of the elements"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("ring of shadows"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("soul bearer"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("circlet of water"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("cowbell amulet"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("pendant of ates"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("bone staff"));
+		Assert.assertTrue(ActionClassifiers.isContainerOrChargedItemTarget("eye of ayak"));
+	}
+
+	@Test
 	public void isContainerOrChargedItemTarget_coinPouch_false()
 	{
 		// Thieving coin pouches convert to coins in place. "Open" is a real

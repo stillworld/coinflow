@@ -25,6 +25,13 @@ final class MenuIntentHandler
 	 */
 	private static final int CARGO_HOLD_DEPOSIT_GRACE_TICKS = 12;
 
+	/**
+	 * Re-baseline window for charge actions — Uncharge/Charge sit behind a
+	 * confirmation or "how many" dialog, so the material diff can land
+	 * several ticks after the click.
+	 */
+	private static final int CHARGE_ACTION_GRACE_TICKS = 12;
+
 	private final CoinFlowPlugin plugin;
 
 	MenuIntentHandler(CoinFlowPlugin plugin)
@@ -120,8 +127,18 @@ final class MenuIntentHandler
 					|| (ActionClassifiers.isContainerOrChargedItemTarget(parts[0].trim()) && (dest.contains("bank") || dest.contains("deposit"))))
 				{
 					plugin.weaponChargeTracker.recordUseSource(parts[0]);
+					// A "Use <material> -> charged item" load can sit behind a
+					// "how many" input — take the longer window and arm the
+					// varbit storage-transition detection.
+					boolean chargedLoad = ActionClassifiers.isChargedItemTarget(dest);
+					if (chargedLoad)
+					{
+						plugin.lastChargeActionTick = tick;
+					}
 					plugin.interfaceTracker.setNeedsRebaseline(true);
-					plugin.rebaselineGraceTicks = 3;
+					plugin.rebaselineGraceTicks = chargedLoad
+						? Math.max(plugin.rebaselineGraceTicks, CHARGE_ACTION_GRACE_TICKS)
+						: 3;
 					log.debug("Container/charged item Use action clicked ('{}'), scheduling rebaseline", target);
 				}
 			}
@@ -140,8 +157,16 @@ final class MenuIntentHandler
 				{
 					plugin.weaponChargeTracker.clearLoadedDarts();
 				}
+				boolean chargeAction = "Charge".equalsIgnoreCase(option)
+					|| "Uncharge".equalsIgnoreCase(option) || "Unload".equalsIgnoreCase(option);
+				if (chargeAction)
+				{
+					plugin.lastChargeActionTick = tick;
+				}
 				plugin.interfaceTracker.setNeedsRebaseline(true);
-				plugin.rebaselineGraceTicks = 3;
+				plugin.rebaselineGraceTicks = chargeAction
+					? Math.max(plugin.rebaselineGraceTicks, CHARGE_ACTION_GRACE_TICKS)
+					: 3;
 				log.debug("Container/charged item action clicked ('{}' on '{}'), scheduling rebaseline", option, target);
 			}
 			// "Open"/"Loot"/"Search" on an inventory pack item (casket, impling
